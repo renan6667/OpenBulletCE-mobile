@@ -222,6 +222,13 @@ private fun ConfigScreen() {
     var loaded by remember { mutableStateOf<DesktopConfigCodec.DesktopConfig?>(null) }
     var name by remember { mutableStateOf("") }
     var author by remember { mutableStateOf("") }
+    var version by remember { mutableStateOf("1.2.2") }
+    var additionalInfo by remember { mutableStateOf("") }
+    var ignoreResponseErrors by remember { mutableStateOf(false) }
+    var maxRedirects by remember { mutableStateOf("8") }
+    var allowedWordlist1 by remember { mutableStateOf("") }
+    var allowedWordlist2 by remember { mutableStateOf("") }
+    var encodeData by remember { mutableStateOf(false) }
     var script by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("No desktop config loaded") }
 
@@ -233,6 +240,13 @@ private fun ConfigScreen() {
         loaded = config
         name = config.name
         author = config.author
+        version = config.settings.optString("Version", "1.2.2")
+        additionalInfo = config.settings.optString("AdditionalInfo")
+        ignoreResponseErrors = config.settings.optBoolean("IgnoreResponseErrors", false)
+        maxRedirects = config.settings.optInt("MaxRedirects", 8).toString()
+        allowedWordlist1 = config.settings.optString("AllowedWordlist1")
+        allowedWordlist2 = config.settings.optString("AllowedWordlist2")
+        encodeData = config.settings.optBoolean("EncodeData", false)
         script = config.script
         status = message
     }
@@ -260,7 +274,14 @@ private fun ConfigScreen() {
             base,
             mapOf(
                 "Name" to name,
-                "Author" to author
+                "Author" to author,
+                "Version" to version,
+                "AdditionalInfo" to additionalInfo,
+                "IgnoreResponseErrors" to ignoreResponseErrors,
+                "MaxRedirects" to (maxRedirects.toIntOrNull() ?: 8).coerceIn(0, 100),
+                "AllowedWordlist1" to allowedWordlist1,
+                "AllowedWordlist2" to allowedWordlist2,
+                "EncodeData" to encodeData
             )
         ).copy(script = script)
     }
@@ -400,6 +421,61 @@ private fun ConfigScreen() {
                 label = { Text("Author") },
                 modifier = Modifier.fillMaxWidth()
             )
+            OutlinedTextField(
+                value = version,
+                onValueChange = { version = it },
+                label = { Text("RuriLib version") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = additionalInfo,
+                onValueChange = { additionalInfo = it },
+                label = { Text("Additional information") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2
+            )
+
+            Text("Request settings", fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Checkbox(
+                    checked = ignoreResponseErrors,
+                    onCheckedChange = { ignoreResponseErrors = it }
+                )
+                Text("Ignore response errors")
+            }
+            OutlinedTextField(
+                value = maxRedirects,
+                onValueChange = { maxRedirects = it.filter(Char::isDigit).take(3) },
+                label = { Text("Maximum redirects (0–100)") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Text("Data settings", fontWeight = FontWeight.Bold)
+            OutlinedTextField(
+                value = allowedWordlist1,
+                onValueChange = { allowedWordlist1 = it },
+                label = { Text("Allowed Wordlist Type 1") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = allowedWordlist2,
+                onValueChange = { allowedWordlist2 = it },
+                label = { Text("Allowed Wordlist Type 2") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Checkbox(
+                    checked = encodeData,
+                    onCheckedChange = { encodeData = it }
+                )
+                Text("URL-encode data after slicing")
+            }
+
+            Text(
+                "SuggestedBots, MaxCPM, proxy and Selenium fields are preserved from PC but are not used to enable automated behavior on Android.",
+                style = MaterialTheme.typography.bodySmall
+            )
+
             OutlinedTextField(
                 value = script,
                 onValueChange = { script = it },
