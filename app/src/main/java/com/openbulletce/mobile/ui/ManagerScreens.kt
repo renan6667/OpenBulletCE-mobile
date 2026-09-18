@@ -273,6 +273,7 @@ fun CookiesScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val store = remember { ManagerStore(context) }
     var records by remember { mutableStateOf(store.cookieSets()) }
+    var search by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
 
     fun refresh() { records = store.cookieSets() }
@@ -284,8 +285,17 @@ fun CookiesScreen() {
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
-                val fallbackName = uri.lastPathSegment?.substringAfterLast(':')?.ifBlank { "Cookies" } ?: "Cookies"
-                store.putCookieSet(CookieSetRecord(name = fallbackName, treeUri = uri.toString()))
+                val fallbackName = uri.lastPathSegment
+                    ?.substringAfterLast(':')
+                    ?.ifBlank { "Cookies" }
+                    ?: "Cookies"
+
+                store.putCookieSet(
+                    CookieSetRecord(
+                        name = fallbackName,
+                        treeUri = uri.toString()
+                    )
+                )
                 refresh()
                 status = "Cookie folder added"
             }.onFailure {
@@ -294,28 +304,76 @@ fun CookiesScreen() {
         }
     }
 
+    val filtered = remember(records, search) {
+        if (search.isBlank()) records
+        else records.filter { it.name.contains(search, ignoreCase = true) }
+    }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text("Cookie Manager", fontWeight = FontWeight.Bold)
         Text(
-            "Like the PC Cookie Edition manager, this stores references to cookie-set folders. Android uses persisted folder URIs.",
+            "Stores local folder references like the desktop manager. The Android port does not automatically validate third-party sessions or cookie files.",
             style = MaterialTheme.typography.bodySmall
         )
         Button(onClick = { picker.launch(null) }) { Text("Add cookie folder") }
+        OutlinedTextField(
+            value = search,
+            onValueChange = { search = it },
+            label = { Text("Search cookie folders") },
+            modifier = Modifier.fillMaxWidth()
+        )
         if (status.isNotBlank()) Text(status)
         HorizontalDivider()
-        Text("Stored: ${records.size}")
-        records.forEach { item ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(item.name, fontWeight = FontWeight.SemiBold)
-                    Text(item.treeUri, style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = {
-                        store.removeCookieSet(item.id)
-                        refresh()
-                    }) { Text("Remove") }
+        Text("Showing: ${filtered.size} / ${records.size}")
+
+        filtered.forEach { item ->
+            CookieSetCard(
+                item = item,
+                onSave = { updated ->
+                    store.putCookieSet(updated)
+                    refresh()
+                    status = "Updated ${updated.name}"
+                },
+                onRemove = {
+                    store.removeCookieSet(item.id)
+                    refresh()
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun CookieSetCard(
+    item: CookieSetRecord,
+    onSave: (CookieSetRecord) -> Unit,
+    onRemove: () -> Unit
+) {
+    var name by remember(item.id, item.name) { mutableStateOf(item.name) }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Name") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(item.treeUri, style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    onSave(item.copy(name = name.trim().ifBlank { item.name }))
+                }) {
+                    Text("Save")
+                }
+                TextButton(onClick = onRemove) {
+                    Text("Remove")
                 }
             }
         }
