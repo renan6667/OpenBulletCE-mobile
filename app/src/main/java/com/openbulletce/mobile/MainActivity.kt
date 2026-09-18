@@ -377,6 +377,7 @@ private fun RunnerScreen() {
 
                         scope.launch {
                             val client = AuthorizedHttpClient(prefs.loadTimeoutMs())
+                            val started = System.nanoTime()
                             val result = client.execute(
                                 SimpleRequest(
                                     method = preset.method,
@@ -386,9 +387,19 @@ private fun RunnerScreen() {
                                 ),
                                 if (useProxy) selectedProxy else null
                             )
+                            val elapsedMs = ((System.nanoTime() - started) / 1_000_000L)
+                                .coerceAtMost(Int.MAX_VALUE.toLong())
+                                .toInt()
 
                             result
                                 .onSuccess { response ->
+                                    if (useProxy && selectedProxy != null) {
+                                        managerStore.markProxyWorking(
+                                            selectedProxy.id,
+                                            elapsedMs
+                                        )
+                                    }
+
                                     lastResponse = response.body.take(12_000)
                                     status = "Completed — HTTP ${response.statusCode}"
                                     if (listSize > 0) {
@@ -409,9 +420,30 @@ private fun RunnerScreen() {
                                         )
                                     )
                                 }
-                                .onFailure {
+                                .onFailure { error ->
                                     lastResponse = ""
-                                    status = "ERROR: ${it.message}"
+
+                                    if (useProxy && selectedProxy != null) {
+                                        val updated = managerStore.recordProxyRetry(
+                                            selectedProxy.id,
+                                            error.message ?: "Runner request failed",
+                                            prefs.loadProxyBanRetryLimit()
+                                        )
+
+                                        if (updated?.banned == true) {
+                                            selectedProxyId = ""
+                                            prefs.saveRunnerDraft(
+                                                prefs.loadRunnerDraft().copy(
+                                                    selectedProxyId = ""
+                                                )
+                                            )
+                                            status = "BANNED — ${updated.banReason}"
+                                        } else {
+                                            status = "RETRY ${updated?.retryCount ?: 1} — ${error.message}"
+                                        }
+                                    } else {
+                                        status = "ERROR: ${error.message}"
+                                    }
                                 }
 
                             running = false
@@ -428,10 +460,13 @@ private fun RunnerScreen() {
                 Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
+                val proxyStats = managerStore.proxies()
                 Text("STATUS: $status", fontWeight = FontWeight.SemiBold)
                 Text("Hits: $configHits")
                 Text("Custom: 0")
                 Text("ToCheck: 0")
+                Text("Retries: ${proxyStats.sumOf { it.retryCount }}")
+                Text("Banned: ${proxyStats.count { it.banned }}")
                 Text("CPM: 0")
             }
         }
