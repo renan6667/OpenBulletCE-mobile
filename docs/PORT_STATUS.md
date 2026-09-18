@@ -19,14 +19,14 @@ The goal is feature and file-format portability for local or explicitly authoriz
 | Main navigation | Native | Compose navigation exposes Runner, Proxies, Wordlists, Cookies, Configs, Hits, Tools, Plugins, Settings and About. |
 | Runner Manager | Partial | Authorized single-request runner exists. Multi-runner/session parity is pending. |
 | Proxy Manager | Partial | Local proxy records and desktop-style parser exist. No automatic evasion/rotation behavior. |
-| Wordlist Manager | Partial | Android Storage Access Framework import and persisted URI references exist. Metadata parity is pending. |
+| Wordlist Manager | Partial | Storage Access Framework import, persisted URI, background line counting, search and Name/Type/Purpose metadata editing exist. Environment-based type recognition is pending. |
 | Cookie Manager | Partial | Persisted folder references exist. Cookie-file parsing/editing parity is pending. |
-| Config Manager | Partial | Import, edit and export of desktop .lce containers exists. Multi-config library/metadata UI is pending. |
+| Config Manager | Partial | Import/edit/export of desktop .lce containers, persisted config library, safe metadata/request/data editors and lossless unknown-field preservation exist. DataRules/CustomInputs editors are pending. |
 | Stacker / LoliScript editor | Partial | Script text can be viewed/edited. Visual block editor and safe parser coverage are pending. |
-| Hits DB | Partial | Local results store/view exists. Search/filter/export parity is pending. |
-| Tools | Pending | Android-safe utilities can be ported separately. |
-| Plugins | Pending / compatibility-only | Required plugin metadata should be reported. Desktop DLL loading is not portable to Android. |
-| Settings | Partial | Authorized hosts and request timeout exist. Broader desktop settings parity is pending. |
+| Hits DB | Partial | Local results store, search, config/type filters and duplicate removal exist. Export/copy parity is pending; automatic recheck is intentionally not ported. |
+| Tools | Partial | Port-aware screens represent desktop List Generator, Selenium Tools and Database areas. Selenium is desktop-only; more Android-safe utilities are pending. |
+| Plugins | Compatibility-only | UI explains the port boundary and .lce RequiredPlugins metadata remains preserved. Desktop .NET DLL execution is not portable to Android. |
+| Settings | Partial | Authorized hosts, explicit wildcard rules and request timeout exist. Broader desktop UI settings parity is pending. |
 | About | Native | Android-specific About screen exists. |
 | Logging | Pending | Structured in-app logs are not yet equivalent to desktop logging. |
 
@@ -95,7 +95,7 @@ Migration to Room can be considered when manager data grows, without changing th
 
 ## Build
 
-GitHub Actions builds a debug APK on the Android port branch. A successful APK build is required before port-status items should be marked Native/Partial.
+GitHub Actions runs JVM compatibility/security tests and then builds a debug APK on the Android port branch. A successful test + APK build is required before port-status items should be marked Native/Partial.
 
 ## Next parity work
 
