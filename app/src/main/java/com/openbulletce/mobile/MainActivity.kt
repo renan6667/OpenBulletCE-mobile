@@ -30,6 +30,7 @@ import com.openbulletce.mobile.data.ConfigLibraryRecord
 import com.openbulletce.mobile.data.ConfigLibraryStore
 import com.openbulletce.mobile.data.HitRecord
 import com.openbulletce.mobile.data.ManagerStore
+import com.openbulletce.mobile.data.MobileProxyStatus
 import com.openbulletce.mobile.data.ProxyCodec
 import com.openbulletce.mobile.data.RunnerDraft
 import com.openbulletce.mobile.network.AuthorizedHttpClient
@@ -364,6 +365,14 @@ private fun RunnerScreen() {
                                 status = issue
                                 return@Button
                             }
+
+                            val maxProxyUses = config.settings
+                                .optInt("MaxProxyUses", 0)
+                                .coerceAtLeast(0)
+                            if (maxProxyUses > 0 && selectedProxy.uses >= maxProxyUses) {
+                                status = "MaxProxyUses reached for selected proxy"
+                                return@Button
+                            }
                         }
 
                         val preset = presetResult.getOrThrow()
@@ -376,8 +385,16 @@ private fun RunnerScreen() {
                         }
 
                         scope.launch {
+                            if (useProxy && selectedProxy != null) {
+                                val busy = managerStore.markProxyBusy(selectedProxy.id)
+                                if (busy?.status != MobileProxyStatus.BUSY) {
+                                    status = "Selected proxy is no longer AVAILABLE"
+                                    running = false
+                                    return@launch
+                                }
+                            }
+
                             val client = AuthorizedHttpClient(prefs.loadTimeoutMs())
-                            val started = System.nanoTime()
                             val result = client.execute(
                                 SimpleRequest(
                                     method = preset.method,
@@ -387,17 +404,11 @@ private fun RunnerScreen() {
                                 ),
                                 if (useProxy) selectedProxy else null
                             )
-                            val elapsedMs = ((System.nanoTime() - started) / 1_000_000L)
-                                .coerceAtMost(Int.MAX_VALUE.toLong())
-                                .toInt()
 
                             result
                                 .onSuccess { response ->
                                     if (useProxy && selectedProxy != null) {
-                                        managerStore.markProxyWorking(
-                                            selectedProxy.id,
-                                            elapsedMs
-                                        )
+                                        managerStore.finishProxyUse(selectedProxy.id)
                                     }
 
                                     lastResponse = response.body.take(12_000)
@@ -422,27 +433,23 @@ private fun RunnerScreen() {
                                 }
                                 .onFailure { error ->
                                     lastResponse = ""
+                                    val retries = prefs.incrementRunnerRetryCount()
 
                                     if (useProxy && selectedProxy != null) {
-                                        val updated = managerStore.recordProxyRetry(
+                                        managerStore.finishProxyUse(selectedProxy.id)
+                                        managerStore.markProxyBad(
                                             selectedProxy.id,
-                                            error.message ?: "Runner request failed",
-                                            prefs.loadProxyBanRetryLimit()
+                                            error.message ?: "Runner request error"
                                         )
-
-                                        if (updated?.banned == true) {
-                                            selectedProxyId = ""
-                                            prefs.saveRunnerDraft(
-                                                prefs.loadRunnerDraft().copy(
-                                                    selectedProxyId = ""
-                                                )
+                                        selectedProxyId = ""
+                                        prefs.saveRunnerDraft(
+                                            prefs.loadRunnerDraft().copy(
+                                                selectedProxyId = ""
                                             )
-                                            status = "BANNED — ${updated.banReason}"
-                                        } else {
-                                            status = "RETRY ${updated?.retryCount ?: 1} — ${error.message}"
-                                        }
+                                        )
+                                        status = "ERROR — proxy BAD • Retries: $retries"
                                     } else {
-                                        status = "ERROR: ${error.message}"
+                                        status = "ERROR • Retries: $retries — ${error.message}"
                                     }
                                 }
 
@@ -465,8 +472,17 @@ private fun RunnerScreen() {
                 Text("Hits: $configHits")
                 Text("Custom: 0")
                 Text("ToCheck: 0")
-                Text("Retries: ${proxyStats.sumOf { it.retryCount }}")
-                Text("Banned: ${proxyStats.count { it.banned }}")
+                Text("Retries: ${prefs.loadRunnerRetryCount()}")
+                Text("Alive: ${proxyStats.count {
+                    it.status == MobileProxyStatus.AVAILABLE ||
+                        it.status == MobileProxyStatus.BUSY
+                }}")
+                Text("Banned: ${proxyStats.count {
+                    it.status == MobileProxyStatus.BANNED
+                }}")
+                Text("Bad: ${proxyStats.count {
+                    it.status == MobileProxyStatus.BAD
+                }}")
                 Text("CPM: 0")
             }
         }
