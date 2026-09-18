@@ -141,6 +141,26 @@ class ManagerStore(context: Context) {
 
     fun clearHits() = saveArray("hits", emptyList())
 
+    fun removeDuplicateHits(): Int {
+        val current = hits()
+        val seen = mutableSetOf<String>()
+        val unique = current.filter { hit ->
+            val key = listOf(
+                hit.data,
+                hit.captured,
+                hit.type,
+                hit.configName,
+                hit.wordlistName
+            ).joinToString("\u0000")
+            seen.add(key)
+        }
+        val removed = current.size - unique.size
+        if (removed > 0) {
+            saveArray("hits", unique.map(::hitJson))
+        }
+        return removed
+    }
+
     private fun readArray(key: String): List<JSONObject> {
         val raw = prefs.getString(key, "[]") ?: "[]"
         val array = runCatching { JSONArray(raw) }.getOrElse { JSONArray() }
