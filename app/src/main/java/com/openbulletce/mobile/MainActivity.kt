@@ -29,6 +29,7 @@ import com.openbulletce.mobile.ui.HitsScreen
 import com.openbulletce.mobile.ui.ProxiesScreen
 import com.openbulletce.mobile.ui.WordlistsScreen
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -209,17 +210,36 @@ private fun ConfigScreen() {
     val store = remember { ConfigDocumentStore(context.contentResolver) }
 
     var loaded by remember { mutableStateOf<DesktopConfigCodec.DesktopConfig?>(null) }
+    var name by remember { mutableStateOf("") }
+    var author by remember { mutableStateOf("") }
+    var script by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("No desktop config loaded") }
+
+    fun loadForEditing(config: DesktopConfigCodec.DesktopConfig, message: String) {
+        loaded = config
+        name = config.name
+        author = config.author
+        script = config.script
+        status = message
+    }
+
+    fun workingConfig(): DesktopConfigCodec.DesktopConfig? {
+        val base = loaded ?: return null
+        return DesktopConfigCodec.withSettings(
+            base,
+            mapOf(
+                "Name" to name,
+                "Author" to author
+            )
+        ).copy(script = script)
+    }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
             runCatching { store.read(uri) }
-                .onSuccess {
-                    loaded = it
-                    status = "Loaded: ${it.name}"
-                }
+                .onSuccess { loadForEditing(it, "Loaded: ${it.name}") }
                 .onFailure { status = "Import error: ${it.message}" }
         }
     }
@@ -227,13 +247,16 @@ private fun ConfigScreen() {
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
-        val config = loaded
+        val config = workingConfig()
         if (uri != null && config != null) {
             runCatching { store.write(uri, config) }
-                .onSuccess { status = "Exported in desktop-compatible format" }
+                .onSuccess { status = "Exported as desktop-compatible .lce" }
                 .onFailure { status = "Export error: ${it.message}" }
         }
     }
+
+    val working = workingConfig()
+    val compatibility = working?.let { ConfigCompatibility.analyze(it) }
 
     Column(
         Modifier
@@ -243,42 +266,75 @@ private fun ConfigScreen() {
     ) {
         Text("PC config compatibility", fontWeight = FontWeight.Bold)
         Text(
-            "Imports and exports the desktop [SETTINGS] + [SCRIPT] container without dropping unknown settings.",
+            "Imports and exports Cookie Edition [SETTINGS] + [SCRIPT] configs. Unknown desktop settings stay preserved.",
             style = MaterialTheme.typography.bodySmall
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Button(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
                 Text("Import PC config")
             }
+            OutlinedButton(onClick = {
+                val fresh = DesktopConfigCodec.DesktopConfig(
+                    settings = JSONObject()
+                        .put("Name", "New Config")
+                        .put("Author", "")
+                        .put("Version", "1.2.2"),
+                    script = ""
+                )
+                loadForEditing(fresh, "New desktop-compatible config")
+            }) {
+                Text("New")
+            }
             Button(
-                enabled = loaded != null,
+                enabled = working != null,
                 onClick = {
-                    val name = loaded?.name
-                        ?.replace(Regex("[^A-Za-z0-9._-]"), "_")
-                        ?.ifBlank { "config" }
-                        ?: "config"
-                    exportLauncher.launch("$name.lce")
+                    val safeName = name
+                        .replace(Regex("[^A-Za-z0-9._-]"), "_")
+                        .ifBlank { "config" }
+                        .take(80)
+                    exportLauncher.launch("$safeName.lce")
                 }
             ) {
-                Text("Export")
+                Text("Export .lce")
             }
         }
 
         Text(status)
 
-        loaded?.let { config ->
-            val report = ConfigCompatibility.analyze(config)
+        working?.let { config ->
             HorizontalDivider()
-            Text("Name: ${config.name}")
-            if (config.author.isNotBlank()) Text("Author: ${config.author}")
-            Text("Settings JSON", fontWeight = FontWeight.Bold)
-            Text(config.settings.toString(2))
-            Text("LoliScript", fontWeight = FontWeight.Bold)
-            Text(config.script.ifBlank { "(empty)" })
+
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Name") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = author,
+                onValueChange = { author = it },
+                label = { Text("Author") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = script,
+                onValueChange = { script = it },
+                label = { Text("[SCRIPT] LoliScript") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 12
+            )
+
+            Text("Preserved [SETTINGS] JSON", fontWeight = FontWeight.Bold)
+            Text(config.settings.toString(2), style = MaterialTheme.typography.bodySmall)
+
             Text("Compatibility report", fontWeight = FontWeight.Bold)
             Text("PC ↔ Android round-trip: preserved")
             Text("Imported LoliScript execution on Android: disabled")
-            report.issues.forEach { issue ->
+            compatibility?.issues?.forEach { issue ->
                 Text(
                     "• ${issue.keyword}: ${issue.message}",
                     style = MaterialTheme.typography.bodySmall
