@@ -6,10 +6,15 @@ import org.json.JSONObject
 
 data class RunnerDraft(
     val method: String = "GET",
-    val url: String = "http://127.0.0.1:8080/",
-    val headersText: String = "Accept: */*",
+    val url: String = "",
+    val headersText: String = "",
     val body: String = "",
-    val selectedProxyId: String = ""
+    val selectedProxyId: String = "",
+    val configId: String = "",
+    val wordlistId: String = "",
+    val proxyMode: String = "DEFAULT",
+    val botsAmount: Int = 1,
+    val startingPoint: Int = 1
 )
 
 class AppPreferences(context: Context) {
@@ -38,17 +43,24 @@ class AppPreferences(context: Context) {
     }
 
     fun loadRunnerDraft(): RunnerDraft {
-        val raw = prefs.getString("runner_draft", null) ?: return RunnerDraft()
+        val raw = prefs.getString("runner_draft", null) ?: return RunnerDraft(
+            configId = loadActiveConfigId()
+        )
         return runCatching {
             val obj = JSONObject(raw)
             RunnerDraft(
                 method = obj.optString("method", "GET"),
-                url = obj.optString("url", "http://127.0.0.1:8080/"),
-                headersText = obj.optString("headersText", "Accept: */*"),
+                url = obj.optString("url"),
+                headersText = obj.optString("headersText"),
                 body = obj.optString("body"),
-                selectedProxyId = obj.optString("selectedProxyId")
+                selectedProxyId = obj.optString("selectedProxyId"),
+                configId = obj.optString("configId", loadActiveConfigId()),
+                wordlistId = obj.optString("wordlistId"),
+                proxyMode = obj.optString("proxyMode", "DEFAULT"),
+                botsAmount = obj.optInt("botsAmount", 1).coerceIn(1, 200),
+                startingPoint = obj.optInt("startingPoint", 1).coerceAtLeast(1)
             )
-        }.getOrDefault(RunnerDraft())
+        }.getOrDefault(RunnerDraft(configId = loadActiveConfigId()))
     }
 
     fun saveRunnerDraft(draft: RunnerDraft) {
@@ -60,22 +72,47 @@ class AppPreferences(context: Context) {
                 .put("headersText", draft.headersText)
                 .put("body", draft.body)
                 .put("selectedProxyId", draft.selectedProxyId)
+                .put("configId", draft.configId)
+                .put("wordlistId", draft.wordlistId)
+                .put("proxyMode", draft.proxyMode)
+                .put("botsAmount", draft.botsAmount.coerceIn(1, 200))
+                .put("startingPoint", draft.startingPoint.coerceAtLeast(1))
                 .toString()
         ).apply()
+
+        prefs.edit().putString("active_config_id", draft.configId).apply()
     }
 
     fun loadActiveConfigId(): String = prefs.getString("active_config_id", "").orEmpty()
 
     fun saveActiveConfigId(id: String) {
         prefs.edit().putString("active_config_id", id).apply()
+        val current = loadRunnerDraft()
+        if (current.configId != id) {
+            saveRunnerDraft(current.copy(configId = id))
+        }
     }
 
     fun loadProxyTestUrl(): String =
-        prefs.getString("proxy_test_url", "http://127.0.0.1:8080/").orEmpty()
-            .ifBlank { "http://127.0.0.1:8080/" }
+        prefs.getString("proxy_test_url", "https://example.com/").orEmpty()
+            .ifBlank { "https://example.com/" }
 
     fun saveProxyTestUrl(url: String) {
         prefs.edit().putString("proxy_test_url", url.trim()).apply()
+    }
+
+    fun loadProxySuccessKey(): String =
+        prefs.getString("proxy_success_key", "").orEmpty()
+
+    fun saveProxySuccessKey(value: String) {
+        prefs.edit().putString("proxy_success_key", value).apply()
+    }
+
+    fun loadProxyCheckerBots(): Int =
+        prefs.getInt("proxy_checker_bots", 1).coerceIn(1, 200)
+
+    fun saveProxyCheckerBots(value: Int) {
+        prefs.edit().putInt("proxy_checker_bots", value.coerceIn(1, 200)).apply()
     }
 
     fun loadLastSection(): String = prefs.getString("last_section", "RUNNER").orEmpty()
