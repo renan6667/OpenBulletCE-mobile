@@ -27,6 +27,8 @@ import com.openbulletce.mobile.network.SimpleRequest
 import com.openbulletce.mobile.security.AuthorizedTargetPolicy
 import com.openbulletce.mobile.ui.CookiesScreen
 import com.openbulletce.mobile.ui.HitsScreen
+import com.openbulletce.mobile.ui.PluginsScreen
+import com.openbulletce.mobile.ui.ToolsScreen
 import com.openbulletce.mobile.ui.ProxiesScreen
 import com.openbulletce.mobile.ui.WordlistsScreen
 import kotlinx.coroutines.launch
@@ -102,9 +104,10 @@ private fun OpenBulletMobileApp() {
                         Section.COOKIES -> CookiesScreen()
                         Section.CONFIGS -> ConfigScreen()
                         Section.HITS -> HitsScreen()
+                        Section.TOOLS -> ToolsScreen()
+                        Section.PLUGINS -> PluginsScreen()
                         Section.SETTINGS -> SettingsScreen()
                         Section.ABOUT -> AboutScreen()
-                        else -> PortPlaceholder(section.label)
                     }
                 }
             }
