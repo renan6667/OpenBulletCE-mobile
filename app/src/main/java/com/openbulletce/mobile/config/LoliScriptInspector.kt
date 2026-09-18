@@ -124,25 +124,21 @@ object LoliScriptInspector {
                     )
                 }
 
-                // Upstream permits an optional #label before a block.
+                if (text.startsWith("##")) {
+                    return@mapIndexed LoliLineInfo(
+                        index + 1, LoliLineKind.COMMENT, "", disabled, original
+                    )
+                }
+
+                // Upstream parsers permit an optional #label before blocks/commands.
                 if (text.startsWith("#")) {
                     val firstSpace = text.indexOf(' ')
                     if (firstSpace < 0) {
                         return@mapIndexed LoliLineInfo(
-                            index + 1, LoliLineKind.COMMENT, "", disabled, original
+                            index + 1, LoliLineKind.UNKNOWN, "", disabled, original
                         )
                     }
-                    val afterLabel = text.substring(firstSpace + 1).trimStart()
-                    val possible = firstToken(afterLabel)
-                    if (possible in blocks) {
-                        return@mapIndexed LoliLineInfo(
-                            index + 1, LoliLineKind.BLOCK, possible, disabled, original
-                        )
-                    }
-
-                    return@mapIndexed LoliLineInfo(
-                        index + 1, LoliLineKind.COMMENT, "", disabled, original
-                    )
+                    text = text.substring(firstSpace + 1).trimStart()
                 }
 
                 val token = firstToken(text)
