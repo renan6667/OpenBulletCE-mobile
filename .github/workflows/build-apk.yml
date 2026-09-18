@@ -8,6 +8,9 @@ on:
       - "docs/**"
       - "**/*.md"
 
+permissions:
+  contents: write
+
 concurrency:
   group: android-apk-${{ github.ref }}
   cancel-in-progress: true
@@ -37,3 +40,9 @@ jobs:
         with:
           name: OpenBulletCE-Mobile-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish latest APK in Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete mobile-latest --cleanup-tag --yes || true
+          gh release create mobile-latest             app/build/outputs/apk/debug/app-debug.apk             --title "OpenBulletCE Mobile - latest debug APK"             --notes "Automatic debug build from commit ${GITHUB_SHA}."             --prerelease             --target "${GITHUB_SHA}"
