@@ -15,7 +15,11 @@ data class ProxyRecord(
     val password: String = "",
     val working: String = "UNTESTED",
     val pingMs: Int = 0,
-    val country: String = ""
+    val country: String = "",
+    val retryCount: Int = 0,
+    val consecutiveFailures: Int = 0,
+    val banned: Boolean = false,
+    val banReason: String = ""
 )
 
 data class WordlistRecord(
@@ -59,7 +63,11 @@ class ManagerStore(context: Context) {
                     password = obj.optString("password"),
                     working = obj.optString("working", "UNTESTED"),
                     pingMs = obj.optInt("pingMs"),
-                    country = obj.optString("country")
+                    country = obj.optString("country"),
+                    retryCount = obj.optInt("retryCount"),
+                    consecutiveFailures = obj.optInt("consecutiveFailures"),
+                    banned = obj.optBoolean("banned", false),
+                    banReason = obj.optString("banReason")
                 )
             }.getOrNull()
         }
@@ -73,6 +81,43 @@ class ManagerStore(context: Context) {
         saveArray("proxies", proxies().filterNot { it.id == id }.map(::proxyJson))
 
     fun clearProxies() = saveArray("proxies", emptyList())
+
+    fun removeFailedProxies(): Int {
+        val current = proxies()
+        val next = current.filterNot { it.working == "FAILED" }
+        val removed = current.size - next.size
+        if (removed > 0) saveArray("proxies", next.map(::proxyJson))
+        return removed
+    }
+
+    fun removeBannedProxies(): Int {
+        val current = proxies()
+        val next = current.filterNot { it.banned || it.working == "BANNED" }
+        val removed = current.size - next.size
+        if (removed > 0) saveArray("proxies", next.map(::proxyJson))
+        return removed
+    }
+
+    fun unbanAllProxies(): Int {
+        val current = proxies()
+        val banned = current.count { it.banned || it.working == "BANNED" }
+        if (banned > 0) {
+            val next = current.map { proxy ->
+                if (proxy.banned || proxy.working == "BANNED") {
+                    proxy.copy(
+                        banned = false,
+                        banReason = "",
+                        consecutiveFailures = 0,
+                        working = "UNTESTED"
+                    )
+                } else {
+                    proxy
+                }
+            }
+            saveArray("proxies", next.map(::proxyJson))
+        }
+        return banned
+    }
 
     fun wordlists(): List<WordlistRecord> =
         readArray("wordlists").mapNotNull { obj ->
@@ -177,6 +222,10 @@ class ManagerStore(context: Context) {
         .put("id", v.id).put("raw", v.raw).put("type", v.type.name)
         .put("username", v.username).put("password", v.password)
         .put("working", v.working).put("pingMs", v.pingMs).put("country", v.country)
+        .put("retryCount", v.retryCount)
+        .put("consecutiveFailures", v.consecutiveFailures)
+        .put("banned", v.banned)
+        .put("banReason", v.banReason)
 
     private fun wordlistJson(v: WordlistRecord) = JSONObject()
         .put("id", v.id).put("name", v.name).put("uri", v.uri)
