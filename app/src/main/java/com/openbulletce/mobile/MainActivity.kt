@@ -235,6 +235,16 @@ private fun ConfigScreen() {
     var allowedWordlist2 by remember { mutableStateOf("") }
     var encodeData by remember { mutableStateOf(false) }
     var script by remember { mutableStateOf("") }
+    var baselineName by remember { mutableStateOf("") }
+    var baselineAuthor by remember { mutableStateOf("") }
+    var baselineVersion by remember { mutableStateOf("1.2.2") }
+    var baselineAdditionalInfo by remember { mutableStateOf("") }
+    var baselineIgnoreResponseErrors by remember { mutableStateOf(false) }
+    var baselineMaxRedirects by remember { mutableStateOf("8") }
+    var baselineAllowedWordlist1 by remember { mutableStateOf("") }
+    var baselineAllowedWordlist2 by remember { mutableStateOf("") }
+    var baselineEncodeData by remember { mutableStateOf(false) }
+    var baselineScript by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("No desktop config loaded") }
 
     fun refreshLibrary() {
@@ -253,6 +263,17 @@ private fun ConfigScreen() {
         allowedWordlist2 = config.settings.optString("AllowedWordlist2")
         encodeData = config.settings.optBoolean("EncodeData", false)
         script = config.script
+
+        baselineName = name
+        baselineAuthor = author
+        baselineVersion = version
+        baselineAdditionalInfo = additionalInfo
+        baselineIgnoreResponseErrors = ignoreResponseErrors
+        baselineMaxRedirects = maxRedirects
+        baselineAllowedWordlist1 = allowedWordlist1
+        baselineAllowedWordlist2 = allowedWordlist2
+        baselineEncodeData = encodeData
+        baselineScript = script
         status = message
     }
 
@@ -275,20 +296,37 @@ private fun ConfigScreen() {
 
     fun workingConfig(): DesktopConfigCodec.DesktopConfig? {
         val base = loaded ?: return null
-        return DesktopConfigCodec.withSettings(
-            base,
-            mapOf(
-                "Name" to name,
-                "Author" to author,
-                "Version" to version,
-                "AdditionalInfo" to additionalInfo,
-                "IgnoreResponseErrors" to ignoreResponseErrors,
-                "MaxRedirects" to (maxRedirects.toIntOrNull() ?: 8).coerceIn(0, 100),
-                "AllowedWordlist1" to allowedWordlist1,
-                "AllowedWordlist2" to allowedWordlist2,
-                "EncodeData" to encodeData
-            )
-        ).copy(script = script)
+        val changes = mutableMapOf<String, Any?>()
+
+        if (name != baselineName) changes["Name"] = name
+        if (author != baselineAuthor) changes["Author"] = author
+        if (version != baselineVersion) changes["Version"] = version
+        if (additionalInfo != baselineAdditionalInfo) changes["AdditionalInfo"] = additionalInfo
+        if (ignoreResponseErrors != baselineIgnoreResponseErrors) {
+            changes["IgnoreResponseErrors"] = ignoreResponseErrors
+        }
+        if (maxRedirects != baselineMaxRedirects) {
+            changes["MaxRedirects"] = (maxRedirects.toIntOrNull() ?: 8).coerceIn(0, 100)
+        }
+        if (allowedWordlist1 != baselineAllowedWordlist1) {
+            changes["AllowedWordlist1"] = allowedWordlist1
+        }
+        if (allowedWordlist2 != baselineAllowedWordlist2) {
+            changes["AllowedWordlist2"] = allowedWordlist2
+        }
+        if (encodeData != baselineEncodeData) changes["EncodeData"] = encodeData
+
+        val withSettings = if (changes.isEmpty()) {
+            base
+        } else {
+            DesktopConfigCodec.withSettings(base, changes)
+        }
+
+        return if (script == baselineScript) {
+            withSettings
+        } else {
+            withSettings.copy(script = script)
+        }
     }
 
     val importLauncher = rememberLauncherForActivityResult(
