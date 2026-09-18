@@ -1,5 +1,7 @@
 package com.openbulletce.mobile
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -20,6 +22,8 @@ import com.openbulletce.mobile.config.ConfigDocumentStore
 import com.openbulletce.mobile.config.DesktopConfigCodec
 import com.openbulletce.mobile.config.LoliScriptInspector
 import com.openbulletce.mobile.data.AppPreferences
+import com.openbulletce.mobile.data.ConfigLibraryRecord
+import com.openbulletce.mobile.data.ConfigLibraryStore
 import com.openbulletce.mobile.data.HitRecord
 import com.openbulletce.mobile.data.ManagerStore
 import com.openbulletce.mobile.network.AuthorizedHttpClient
@@ -212,12 +216,18 @@ private fun RunnerScreen() {
 private fun ConfigScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val store = remember { ConfigDocumentStore(context.contentResolver) }
+    val libraryStore = remember { ConfigLibraryStore(context) }
 
+    var library by remember { mutableStateOf(libraryStore.configs()) }
     var loaded by remember { mutableStateOf<DesktopConfigCodec.DesktopConfig?>(null) }
     var name by remember { mutableStateOf("") }
     var author by remember { mutableStateOf("") }
     var script by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("No desktop config loaded") }
+
+    fun refreshLibrary() {
+        library = libraryStore.configs()
+    }
 
     fun loadForEditing(config: DesktopConfigCodec.DesktopConfig, message: String) {
         loaded = config
@@ -225,6 +235,23 @@ private fun ConfigScreen() {
         author = config.author
         script = config.script
         status = message
+    }
+
+    fun rememberImportedConfig(uri: Uri, config: DesktopConfigCodec.DesktopConfig) {
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        libraryStore.put(
+            ConfigLibraryRecord(
+                name = config.name,
+                author = config.author,
+                uri = uri.toString()
+            )
+        )
+        refreshLibrary()
     }
 
     fun workingConfig(): DesktopConfigCodec.DesktopConfig? {
@@ -243,7 +270,10 @@ private fun ConfigScreen() {
     ) { uri ->
         if (uri != null) {
             runCatching { store.read(uri) }
-                .onSuccess { loadForEditing(it, "Loaded: ${it.name}") }
+                .onSuccess {
+                    loadForEditing(it, "Loaded: ${it.name}")
+                    rememberImportedConfig(uri, it)
+                }
                 .onFailure { status = "Import error: ${it.message}" }
         }
     }
@@ -309,6 +339,51 @@ private fun ConfigScreen() {
         }
 
         Text(status)
+
+        if (library.isNotEmpty()) {
+            Text("Config library", fontWeight = FontWeight.Bold)
+            Text(
+                "Imported .lce documents kept through Android document permissions.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            library.forEach { item ->
+                Card(Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(item.name, fontWeight = FontWeight.SemiBold)
+                        if (item.author.isNotBlank()) Text(item.author)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = {
+                                runCatching {
+                                    val uri = Uri.parse(item.uri)
+                                    val config = store.read(uri)
+                                    loadForEditing(config, "Loaded: ${config.name}")
+                                    libraryStore.touch(
+                                        item.copy(
+                                            name = config.name,
+                                            author = config.author
+                                        )
+                                    )
+                                    refreshLibrary()
+                                }.onFailure {
+                                    status = "Open error: ${it.message}"
+                                }
+                            }) {
+                                Text("Open")
+                            }
+                            TextButton(onClick = {
+                                libraryStore.remove(item.id)
+                                refreshLibrary()
+                            }) {
+                                Text("Forget")
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         working?.let { config ->
             HorizontalDivider()
