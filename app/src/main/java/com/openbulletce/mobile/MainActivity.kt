@@ -234,6 +234,8 @@ private fun ConfigScreen() {
     var author by remember { mutableStateOf("") }
     var version by remember { mutableStateOf("1.2.2") }
     var additionalInfo by remember { mutableStateOf("") }
+    var saveEmptyCaptures by remember { mutableStateOf(false) }
+    var continueOnCustom by remember { mutableStateOf(false) }
     var ignoreResponseErrors by remember { mutableStateOf(false) }
     var maxRedirects by remember { mutableStateOf("8") }
     var allowedWordlist1 by remember { mutableStateOf("") }
@@ -246,6 +248,8 @@ private fun ConfigScreen() {
     var baselineAuthor by remember { mutableStateOf("") }
     var baselineVersion by remember { mutableStateOf("1.2.2") }
     var baselineAdditionalInfo by remember { mutableStateOf("") }
+    var baselineSaveEmptyCaptures by remember { mutableStateOf(false) }
+    var baselineContinueOnCustom by remember { mutableStateOf(false) }
     var baselineIgnoreResponseErrors by remember { mutableStateOf(false) }
     var baselineMaxRedirects by remember { mutableStateOf("8") }
     var baselineAllowedWordlist1 by remember { mutableStateOf("") }
@@ -266,6 +270,8 @@ private fun ConfigScreen() {
         author = config.author
         version = config.settings.optString("Version", "1.2.2")
         additionalInfo = config.settings.optString("AdditionalInfo")
+        saveEmptyCaptures = config.settings.optBoolean("SaveEmptyCaptures", false)
+        continueOnCustom = config.settings.optBoolean("ContinueOnCustom", false)
         ignoreResponseErrors = config.settings.optBoolean("IgnoreResponseErrors", false)
         maxRedirects = config.settings.optInt("MaxRedirects", 8).toString()
         allowedWordlist1 = config.settings.optString("AllowedWordlist1")
@@ -279,6 +285,8 @@ private fun ConfigScreen() {
         baselineAuthor = author
         baselineVersion = version
         baselineAdditionalInfo = additionalInfo
+        baselineSaveEmptyCaptures = saveEmptyCaptures
+        baselineContinueOnCustom = continueOnCustom
         baselineIgnoreResponseErrors = ignoreResponseErrors
         baselineMaxRedirects = maxRedirects
         baselineAllowedWordlist1 = allowedWordlist1
@@ -315,6 +323,12 @@ private fun ConfigScreen() {
         if (author != baselineAuthor) changes["Author"] = author
         if (version != baselineVersion) changes["Version"] = version
         if (additionalInfo != baselineAdditionalInfo) changes["AdditionalInfo"] = additionalInfo
+        if (saveEmptyCaptures != baselineSaveEmptyCaptures) {
+            changes["SaveEmptyCaptures"] = saveEmptyCaptures
+        }
+        if (continueOnCustom != baselineContinueOnCustom) {
+            changes["ContinueOnCustom"] = continueOnCustom
+        }
         if (ignoreResponseErrors != baselineIgnoreResponseErrors) {
             changes["IgnoreResponseErrors"] = ignoreResponseErrors
         }
@@ -496,6 +510,20 @@ private fun ConfigScreen() {
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Checkbox(
+                    checked = saveEmptyCaptures,
+                    onCheckedChange = { saveEmptyCaptures = it }
+                )
+                Text("Save empty captures")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Checkbox(
+                    checked = continueOnCustom,
+                    onCheckedChange = { continueOnCustom = it }
+                )
+                Text("Continue after Custom status (desktop setting)")
+            }
 
             Text("Request settings", fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -555,6 +583,17 @@ private fun ConfigScreen() {
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 12
             )
+
+            val requiredPlugins = config.settings.optJSONArray("RequiredPlugins")
+            if (requiredPlugins != null && requiredPlugins.length() > 0) {
+                Text("Required desktop plugins", fontWeight = FontWeight.Bold)
+                for (index in 0 until requiredPlugins.length()) {
+                    Text(
+                        "• ${requiredPlugins.optString(index)} (preserved; desktop plugin)",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
 
             Text("Preserved [SETTINGS] JSON", fontWeight = FontWeight.Bold)
             Text(config.settings.toString(2), style = MaterialTheme.typography.bodySmall)
