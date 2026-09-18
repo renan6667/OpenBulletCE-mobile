@@ -34,6 +34,7 @@ fun ProxiesScreen() {
     var testSite by remember { mutableStateOf(prefs.loadProxyTestUrl()) }
     var successKey by remember { mutableStateOf(prefs.loadProxySuccessKey()) }
     var checkerBots by remember { mutableStateOf(prefs.loadProxyCheckerBots()) }
+    var banRetryLimit by remember { mutableStateOf(prefs.loadProxyBanRetryLimit()) }
     var selectedProxyId by remember {
         mutableStateOf(prefs.loadRunnerDraft().selectedProxyId)
     }
@@ -44,7 +45,20 @@ fun ProxiesScreen() {
         records = store.proxies()
     }
 
+    fun clearSelectedIfBanned(proxy: ProxyRecord?) {
+        if (proxy != null && proxy.banned && selectedProxyId == proxy.id) {
+            selectedProxyId = ""
+            prefs.saveRunnerDraft(
+                prefs.loadRunnerDraft().copy(selectedProxyId = "")
+            )
+        }
+    }
+
     suspend fun checkProxy(proxy: ProxyRecord): Pair<ProxyRecord, String> {
+        if (proxy.banned) {
+            return proxy to "BANNED • ${proxy.banReason}"
+        }
+
         val started = System.nanoTime()
         val client = AuthorizedHttpClient(prefs.loadTimeoutMs())
         val result = client.execute(
@@ -59,19 +73,36 @@ fun ProxiesScreen() {
             onSuccess = { response ->
                 val keyMatches = successKey.isBlank() ||
                     response.body.contains(successKey)
-                val updated = proxy.copy(
-                    working = if (keyMatches) "WORKING" else "FAILED",
-                    pingMs = ping
-                )
-                updated to if (keyMatches) {
-                    "WORKING • $ping ms"
+
+                if (keyMatches) {
+                    val updated = store.markProxyWorking(proxy.id, ping) ?: proxy
+                    updated to "WORKING • $ping ms"
                 } else {
-                    "FAILED • Success Key not found"
+                    val updated = store.recordProxyRetry(
+                        proxy.id,
+                        "Success Key not found",
+                        banRetryLimit
+                    ) ?: proxy
+                    clearSelectedIfBanned(updated)
+                    updated to if (updated.banned) {
+                        "BANNED • ${updated.retryCount} retries"
+                    } else {
+                        "FAILED • Retry ${updated.retryCount}"
+                    }
                 }
             },
-            onFailure = {
-                proxy.copy(working = "FAILED", pingMs = ping) to
-                    "FAILED • ${it.message}"
+            onFailure = { error ->
+                val updated = store.recordProxyRetry(
+                    proxy.id,
+                    error.message ?: "Proxy request failed",
+                    banRetryLimit
+                ) ?: proxy
+                clearSelectedIfBanned(updated)
+                updated to if (updated.banned) {
+                    "BANNED • ${updated.retryCount} retries"
+                } else {
+                    "FAILED • Retry ${updated.retryCount} • ${error.message}"
+                }
             }
         )
     }
@@ -105,6 +136,45 @@ fun ProxiesScreen() {
                 }
             }) {
                 Text("Import / Add")
+            }
+
+            OutlinedButton(
+                enabled = records.any { it.working == "FAILED" } && !checking,
+                onClick = {
+                    val removed = store.removeFailedProxies()
+                    refresh()
+                    status = "Deleted $removed failed proxy(s)"
+                }
+            ) {
+                Text("Del. Faileds")
+            }
+
+            OutlinedButton(
+                enabled = records.any { it.banned } && !checking,
+                onClick = {
+                    val removed = store.removeBannedProxies()
+                    if (selectedProxyId !in store.proxies().map { it.id }) {
+                        selectedProxyId = ""
+                        prefs.saveRunnerDraft(
+                            prefs.loadRunnerDraft().copy(selectedProxyId = "")
+                        )
+                    }
+                    refresh()
+                    status = "Deleted $removed banned proxy(s)"
+                }
+            ) {
+                Text("Del. Banned")
+            }
+
+            OutlinedButton(
+                enabled = records.any { it.banned } && !checking,
+                onClick = {
+                    val count = store.unbanAllProxies()
+                    refresh()
+                    status = "Unbanned $count proxy(s)"
+                }
+            ) {
+                Text("Unban All")
             }
 
             OutlinedButton(
@@ -157,35 +227,49 @@ fun ProxiesScreen() {
             steps = 198
         )
 
+        Text("Ban after consecutive retries: $banRetryLimit")
+        Slider(
+            value = banRetryLimit.toFloat(),
+            onValueChange = {
+                banRetryLimit = it.toInt().coerceIn(1, 20)
+                prefs.saveProxyBanRetryLimit(banRetryLimit)
+            },
+            valueRange = 1f..20f,
+            steps = 18
+        )
+
         Button(
-            enabled = records.isNotEmpty() && !checking && testSite.isNotBlank(),
+            enabled = records.any { !it.banned } && !checking && testSite.isNotBlank(),
             onClick = {
                 checking = true
                 prefs.saveProxyTestUrl(testSite)
                 prefs.saveProxySuccessKey(successKey)
                 prefs.saveProxyCheckerBots(checkerBots)
+                prefs.saveProxyBanRetryLimit(banRetryLimit)
                 status = "Checking proxies..."
 
                 scope.launch {
-                    var tested = 0
-                    var working = 0
+                    var testedNow = 0
+                    var workingNow = 0
+                    val checkableCount = records.count { !it.banned }
 
                     records.forEach { proxy ->
-                        val issue = ProxyCodec.executionIssue(proxy)
-                        if (issue != null) {
-                            store.putProxy(proxy.copy(working = "UNSUPPORTED"))
-                        } else {
-                            val (updated, _) = checkProxy(proxy)
-                            store.putProxy(updated)
-                            tested++
-                            if (updated.working == "WORKING") working++
+                        if (!proxy.banned) {
+                            val issue = ProxyCodec.executionIssue(proxy)
+                            if (issue != null) {
+                                store.putProxy(proxy.copy(working = "UNSUPPORTED"))
+                            } else {
+                                val (updated, _) = checkProxy(proxy)
+                                testedNow++
+                                if (updated.working == "WORKING") workingNow++
+                            }
                         }
                         refresh()
-                        status = "Checked $tested / ${records.size} • Working: $working"
+                        status = "Checked $testedNow / $checkableCount • Working: $workingNow"
                     }
 
                     checking = false
-                    status = "CHECK complete • Working: $working / ${records.size}"
+                    status = "CHECK complete • Working: $workingNow"
                 }
             }
         ) {
@@ -199,12 +283,16 @@ fun ProxiesScreen() {
         val tested = records.count { it.working != "UNTESTED" }
         val working = records.count { it.working == "WORKING" }
         val failed = records.count { it.working == "FAILED" }
+        val banned = records.count { it.banned || it.working == "BANNED" }
+        val totalRetries = records.sumOf { it.retryCount }
 
         Text("STATISTICS", fontWeight = FontWeight.Bold)
         Text("Total: ${records.size}")
         Text("Tested: $tested")
         Text("Working: $working")
         Text("Not Working: $failed")
+        Text("Banned: $banned")
+        Text("Retries: $totalRetries")
         Text("HTTP: ${records.count { it.type == MobileProxyType.HTTP }}")
         Text("SOCKS4: ${records.count { it.type == MobileProxyType.SOCKS4 }}")
         Text("SOCKS4a: ${records.count { it.type == MobileProxyType.SOCKS4A }}")
@@ -225,6 +313,17 @@ fun ProxiesScreen() {
                         "${proxy.type} • ${proxy.working}" +
                             if (proxy.pingMs > 0) " • ${proxy.pingMs} ms" else ""
                     )
+                    Text(
+                        "Retries: ${proxy.retryCount} • Consecutive: ${proxy.consecutiveFailures}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    if (proxy.banned) {
+                        Text(
+                            "BANNED: ${proxy.banReason}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
 
                     if (selected) {
                         Text(
@@ -234,8 +333,10 @@ fun ProxiesScreen() {
                         )
                     }
 
-                    ProxyCodec.executionIssue(proxy)?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall)
+                    if (!proxy.banned) {
+                        ProxyCodec.executionIssue(proxy)?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
 
                     Row(
@@ -244,14 +345,14 @@ fun ProxiesScreen() {
                     ) {
                         OutlinedButton(
                             enabled = !checking &&
+                                !proxy.banned &&
                                 ProxyCodec.executionIssue(proxy) == null &&
                                 testSite.isNotBlank(),
                             onClick = {
                                 checking = true
                                 status = "Checking proxy..."
                                 scope.launch {
-                                    val (updated, message) = checkProxy(proxy)
-                                    store.putProxy(updated)
+                                    val (_, message) = checkProxy(proxy)
                                     refresh()
                                     status = message
                                     checking = false
@@ -261,16 +362,29 @@ fun ProxiesScreen() {
                             Text("Test")
                         }
 
-                        Button(onClick = {
-                            selectedProxyId = proxy.id
-                            prefs.saveRunnerDraft(
-                                prefs.loadRunnerDraft().copy(
-                                    selectedProxyId = proxy.id
+                        Button(
+                            enabled = !proxy.banned,
+                            onClick = {
+                                selectedProxyId = proxy.id
+                                prefs.saveRunnerDraft(
+                                    prefs.loadRunnerDraft().copy(
+                                        selectedProxyId = proxy.id
+                                    )
                                 )
-                            )
-                            status = "Proxy selected for Runner"
-                        }) {
+                                status = "Proxy selected for Runner"
+                            }
+                        ) {
                             Text(if (selected) "Selected" else "Use")
+                        }
+
+                        if (proxy.banned) {
+                            OutlinedButton(onClick = {
+                                store.unbanProxy(proxy.id)
+                                refresh()
+                                status = "Proxy unbanned"
+                            }) {
+                                Text("Unban")
+                            }
                         }
 
                         TextButton(onClick = {
