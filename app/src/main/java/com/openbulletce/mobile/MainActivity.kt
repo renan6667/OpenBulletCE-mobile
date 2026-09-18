@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import com.openbulletce.mobile.config.ConfigCompatibility
 import com.openbulletce.mobile.config.ConfigDocumentStore
 import com.openbulletce.mobile.config.DesktopConfigCodec
+import com.openbulletce.mobile.config.LoliScriptInspector
 import com.openbulletce.mobile.data.AppPreferences
 import com.openbulletce.mobile.data.HitRecord
 import com.openbulletce.mobile.data.ManagerStore
@@ -257,6 +258,7 @@ private fun ConfigScreen() {
 
     val working = workingConfig()
     val compatibility = working?.let { ConfigCompatibility.analyze(it) }
+    val scriptReport = remember(script) { LoliScriptInspector.inspect(script) }
 
     Column(
         Modifier
@@ -330,6 +332,26 @@ private fun ConfigScreen() {
 
             Text("Preserved [SETTINGS] JSON", fontWeight = FontWeight.Bold)
             Text(config.settings.toString(2), style = MaterialTheme.typography.bodySmall)
+
+            Text("Stacker / script inspection", fontWeight = FontWeight.Bold)
+            Text(
+                "Detected blocks: " +
+                    if (scriptReport.blockCounts.isEmpty()) "(none)"
+                    else scriptReport.blockCounts.entries.joinToString { "${it.key}=${it.value}" },
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (scriptReport.unknownLines.isNotEmpty()) {
+                Text(
+                    "Unrecognized lines: ${scriptReport.unknownLines.size} (preserved, not executed)",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (scriptReport.embeddedScriptPresent) {
+                Text(
+                    "Embedded script detected: preserved as text; execution disabled.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
 
             Text("Compatibility report", fontWeight = FontWeight.Bold)
             Text("PC ↔ Android round-trip: preserved")
