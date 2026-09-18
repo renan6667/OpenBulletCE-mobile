@@ -3,13 +3,13 @@ package com.openbulletce.mobile.network
 import com.openbulletce.mobile.data.MobileProxyType
 import com.openbulletce.mobile.data.ProxyCodec
 import com.openbulletce.mobile.data.ProxyRecord
-import com.openbulletce.mobile.security.AuthorizedTargetPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.URI
 import java.net.URL
 import java.util.Base64
 
@@ -28,7 +28,6 @@ data class SimpleResponse(
 )
 
 class AuthorizedHttpClient(
-    private val policy: AuthorizedTargetPolicy,
     private val timeoutMs: Int
 ) {
     suspend fun execute(
@@ -36,8 +35,14 @@ class AuthorizedHttpClient(
         proxy: ProxyRecord? = null
     ): Result<SimpleResponse> = withContext(Dispatchers.IO) {
         runCatching {
-            val decision = policy.check(request.url)
-            require(decision.allowed) { decision.reason ?: "Target is not authorized" }
+            val uri = runCatching { URI(request.url) }
+                .getOrElse { error("Invalid URL") }
+            require(uri.scheme in setOf("http", "https")) {
+                "Only HTTP/HTTPS URLs are supported"
+            }
+            require(!uri.host.isNullOrBlank()) {
+                "URL has no valid host"
+            }
 
             val method = request.method.uppercase()
             require(method in setOf("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE")) {
@@ -63,7 +68,7 @@ class AuthorizedHttpClient(
                     proxy.password.isNotBlank()
                 ) {
                     val token = Base64.getEncoder().encodeToString(
-                        "undefined:undefined".toByteArray(Charsets.UTF_8)
+                        "${proxy.username}:${proxy.password}".toByteArray(Charsets.UTF_8)
                     )
                     connection.setRequestProperty("Proxy-Authorization", "Basic $token")
                 }
