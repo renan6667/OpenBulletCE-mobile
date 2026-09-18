@@ -24,11 +24,14 @@ import com.openbulletce.mobile.config.DataRuleSpec
 import com.openbulletce.mobile.config.DesktopConfigCollections
 import com.openbulletce.mobile.config.DesktopConfigCodec
 import com.openbulletce.mobile.config.LoliScriptInspector
+import com.openbulletce.mobile.config.SafeRequestPresetParser
 import com.openbulletce.mobile.data.AppPreferences
 import com.openbulletce.mobile.data.ConfigLibraryRecord
 import com.openbulletce.mobile.data.ConfigLibraryStore
 import com.openbulletce.mobile.data.HitRecord
 import com.openbulletce.mobile.data.ManagerStore
+import com.openbulletce.mobile.data.ProxyCodec
+import com.openbulletce.mobile.data.RunnerDraft
 import com.openbulletce.mobile.network.AuthorizedHttpClient
 import com.openbulletce.mobile.network.SimpleRequest
 import com.openbulletce.mobile.security.AuthorizedTargetPolicy
@@ -40,6 +43,7 @@ import com.openbulletce.mobile.ui.PluginsScreen
 import com.openbulletce.mobile.ui.ToolsScreen
 import com.openbulletce.mobile.ui.ProxiesScreen
 import com.openbulletce.mobile.ui.WordlistsScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -69,7 +73,17 @@ private enum class Section(val label: String) {
 
 @Composable
 private fun OpenBulletMobileApp() {
-    var section by remember { mutableStateOf(Section.RUNNER) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember { AppPreferences(context) }
+    val initialSection = remember {
+        runCatching { Section.valueOf(prefs.loadLastSection()) }
+            .getOrDefault(Section.RUNNER)
+    }
+    var section by remember { mutableStateOf(initialSection) }
+
+    LaunchedEffect(section) {
+        prefs.saveLastSection(section.name)
+    }
 
     MaterialTheme(
         colorScheme = darkColorScheme(
@@ -129,15 +143,38 @@ private fun RunnerScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { AppPreferences(context) }
     val managerStore = remember { ManagerStore(context) }
+    val libraryStore = remember { ConfigLibraryStore(context) }
+    val documentStore = remember { ConfigDocumentStore(context.contentResolver) }
     val scope = rememberCoroutineScope()
 
-    var method by remember { mutableStateOf("GET") }
-    var url by remember { mutableStateOf("http://127.0.0.1:8080/") }
-    var headersText by remember { mutableStateOf("Accept: */*") }
-    var body by remember { mutableStateOf("") }
+    val initialDraft = remember { prefs.loadRunnerDraft() }
+    var method by remember { mutableStateOf(initialDraft.method) }
+    var url by remember { mutableStateOf(initialDraft.url) }
+    var headersText by remember { mutableStateOf(initialDraft.headersText) }
+    var body by remember { mutableStateOf(initialDraft.body) }
+    var selectedProxyId by remember { mutableStateOf(initialDraft.selectedProxyId) }
+    var proxyMenuExpanded by remember { mutableStateOf(false) }
     var output by remember { mutableStateOf("Ready") }
     var lastResponse by remember { mutableStateOf<String?>(null) }
     var running by remember { mutableStateOf(false) }
+
+    val proxies = remember { managerStore.proxies() }
+    val selectedProxy = proxies.firstOrNull { it.id == selectedProxyId }
+    val activeConfigId = prefs.loadActiveConfigId()
+    val activeConfigRecord = remember(activeConfigId) { libraryStore.find(activeConfigId) }
+
+    LaunchedEffect(method, url, headersText, body, selectedProxyId) {
+        delay(250)
+        prefs.saveRunnerDraft(
+            RunnerDraft(
+                method = method,
+                url = url,
+                headersText = headersText,
+                body = body,
+                selectedProxyId = selectedProxyId
+            )
+        )
+    }
 
     Column(
         Modifier
@@ -147,11 +184,64 @@ private fun RunnerScreen() {
     ) {
         Text("Authorized request runner", fontWeight = FontWeight.Bold)
         Text(
-            "Requests only run when the host is present in Settings > Authorized hosts.",
+            "Runner fields, selected proxy and active config are restored when the app opens again. Requests still require an explicitly authorized destination host.",
             style = MaterialTheme.typography.bodySmall
         )
-        OutlinedTextField(method, { method = it.uppercase() }, label = { Text("Method") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(url, { url = it }, label = { Text("URL") }, modifier = Modifier.fillMaxWidth())
+
+        activeConfigRecord?.let { record ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("Active config: ${record.name}", fontWeight = FontWeight.SemiBold)
+                    if (record.author.isNotBlank()) Text(record.author)
+
+                    OutlinedButton(
+                        enabled = !running,
+                        onClick = {
+                            val config = libraryStore.loadSnapshot(record)
+                                ?: runCatching {
+                                    if (record.uri.isBlank()) null
+                                    else documentStore.read(Uri.parse(record.uri))
+                                }.getOrNull()
+
+                            if (config == null) {
+                                output = "ERROR: active config could not be reopened."
+                            } else {
+                                SafeRequestPresetParser.fromConfig(config)
+                                    .onSuccess { preset ->
+                                        method = preset.method
+                                        url = preset.url
+                                        headersText = preset.headers.entries
+                                            .joinToString("\n") { "${it.key}: ${it.value}" }
+                                        body = preset.body
+                                        output = "Loaded the first static REQUEST from ${record.name}. Full LoliScript was not executed."
+                                    }
+                                    .onFailure {
+                                        output = "Config is active, but its REQUEST cannot be loaded as a safe static preset: ${it.message}"
+                                    }
+                            }
+                        }
+                    ) {
+                        Text("Load REQUEST into Runner")
+                    }
+                }
+            }
+        }
+
+        OutlinedTextField(
+            method,
+            { method = it.uppercase().take(10) },
+            label = { Text("Method") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            url,
+            { url = it },
+            label = { Text("URL") },
+            modifier = Modifier.fillMaxWidth()
+        )
         OutlinedTextField(
             headersText,
             { headersText = it },
@@ -159,10 +249,59 @@ private fun RunnerScreen() {
             modifier = Modifier.fillMaxWidth(),
             minLines = 3
         )
-        OutlinedTextField(body, { body = it }, label = { Text("Body") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
+        OutlinedTextField(
+            body,
+            { body = it },
+            label = { Text("Body") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 3
+        )
+
+        Text("Proxy", fontWeight = FontWeight.SemiBold)
+        Box {
+            OutlinedButton(onClick = { proxyMenuExpanded = true }) {
+                Text(
+                    selectedProxy?.let {
+                        ProxyCodec.displayMasked(it) + " • " + it.working
+                    } ?: "No proxy"
+                )
+            }
+            DropdownMenu(
+                expanded = proxyMenuExpanded,
+                onDismissRequest = { proxyMenuExpanded = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("No proxy") },
+                    onClick = {
+                        selectedProxyId = ""
+                        proxyMenuExpanded = false
+                    }
+                )
+                proxies.forEach { proxy ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                ProxyCodec.displayMasked(proxy) +
+                                    " • " + proxy.type + " • " + proxy.working
+                            )
+                        },
+                        onClick = {
+                            selectedProxyId = proxy.id
+                            proxyMenuExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+
+        selectedProxy?.let { proxy ->
+            ProxyCodec.executionIssue(proxy)?.let { issue ->
+                Text(issue, style = MaterialTheme.typography.bodySmall)
+            }
+        }
 
         Button(
-            enabled = !running,
+            enabled = !running && (selectedProxy == null || ProxyCodec.executionIssue(selectedProxy) == null),
             onClick = {
                 running = true
                 output = "Running..."
@@ -178,7 +317,10 @@ private fun RunnerScreen() {
                 val client = AuthorizedHttpClient(policy, prefs.loadTimeoutMs())
 
                 scope.launch {
-                    val result = client.execute(SimpleRequest(method, url, headers, body))
+                    val result = client.execute(
+                        SimpleRequest(method, url, headers, body),
+                        selectedProxy
+                    )
                     output = result.fold(
                         onSuccess = {
                             lastResponse = it.body.take(12_000)
@@ -187,7 +329,10 @@ private fun RunnerScreen() {
                             } else {
                                 ""
                             }
-                            "HTTP ${it.statusCode}\n\n${it.body.take(12_000)}$suffix"
+                            val proxyLine = selectedProxy?.let { p ->
+                                "\nProxy: ${ProxyCodec.displayMasked(p)}"
+                            }.orEmpty()
+                            "HTTP ${it.statusCode}$proxyLine\n\n${it.body.take(12_000)}$suffix"
                         },
                         onFailure = {
                             lastResponse = null
@@ -208,7 +353,9 @@ private fun RunnerScreen() {
                     HitRecord(
                         data = url,
                         captured = lastResponse.orEmpty().take(2_000),
-                        type = "MANUAL_HTTP"
+                        proxy = selectedProxy?.let(ProxyCodec::displayMasked).orEmpty(),
+                        type = "MANUAL_HTTP",
+                        configName = activeConfigRecord?.name.orEmpty()
                     )
                 )
                 output += "\n\nSaved to Hits DB."
