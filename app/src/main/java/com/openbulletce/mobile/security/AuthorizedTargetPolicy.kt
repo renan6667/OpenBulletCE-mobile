@@ -24,18 +24,48 @@ class AuthorizedTargetPolicy(
         val host = uri.host?.lowercase()?.trimEnd('.')
             ?: return Decision(false, "URL has no valid host")
 
-        val normalized = allowedHosts
-            .map { it.lowercase().trim().trimEnd('.') }
-            .filter { it.isNotBlank() }
+        val rules = allowedHosts
+            .mapNotNull(::normalizeRule)
 
-        val allowed = normalized.any { candidate ->
-            host == candidate || host.endsWith(".$candidate")
+        val allowed = rules.any { rule ->
+            if (rule.wildcard) {
+                host.endsWith(".${rule.host}") && host != rule.host
+            } else {
+                host == rule.host
+            }
         }
 
         return if (allowed) {
             Decision(true)
         } else {
-            Decision(false, "Host '$host' is not in the authorized-host list")
+            Decision(
+                false,
+                "Host '$host' is not explicitly authorized. Add the exact host or an explicit *.domain rule."
+            )
         }
     }
+
+    private fun normalizeRule(raw: String): HostRule? {
+        val text = raw.lowercase().trim().trimEnd('.')
+        if (text.isBlank()) return null
+
+        val wildcard = text.startsWith("*.")
+        val host = if (wildcard) text.removePrefix("*.") else text
+
+        if (host.isBlank() || host.contains('/') || host.contains(':') || host.contains('*')) {
+            return null
+        }
+
+        // Avoid an accidental wildcard such as *.com / *.net.
+        if (wildcard && !host.contains('.')) {
+            return null
+        }
+
+        return HostRule(host = host, wildcard = wildcard)
+    }
+
+    private data class HostRule(
+        val host: String,
+        val wildcard: Boolean
+    )
 }
