@@ -177,7 +177,12 @@ private fun RunnerScreen() {
                     output = result.fold(
                         onSuccess = {
                             lastResponse = it.body.take(12_000)
-                            "HTTP ${it.statusCode}\n\n${it.body.take(12_000)}"
+                            val suffix = if (it.truncated) {
+                                "\n\n[Response truncated by mobile safety limit]"
+                            } else {
+                                ""
+                            }
+                            "HTTP ${it.statusCode}\n\n${it.body.take(12_000)}$suffix"
                         },
                         onFailure = {
                             lastResponse = null
