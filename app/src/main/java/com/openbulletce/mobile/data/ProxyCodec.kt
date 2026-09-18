@@ -13,11 +13,17 @@ object ProxyCodec {
 
     fun displayMasked(proxy: ProxyRecord): String {
         if (proxy.password.isBlank()) return proxy.raw
-        val credentialTail = ":undefined:undefined"
-        return proxy.raw.replace(credentialTail, ":undefined:••••")
+        val credentialTail = ":${proxy.username}:${proxy.password}"
+        return proxy.raw.replace(
+            credentialTail,
+            ":${proxy.username}:••••"
+        )
     }
 
     fun executionIssue(proxy: ProxyRecord): String? {
+        if (proxy.banned || proxy.working == "BANNED") {
+            return proxy.banReason.ifBlank { "Proxy is locally banned." }
+        }
         if ("->" in proxy.raw) {
             return "Proxy chains are stored for compatibility but are not executable on Android yet."
         }
