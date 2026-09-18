@@ -11,8 +11,12 @@ object SafeRequestPresetParser {
     private val requestRegex = Regex(
         """(?i)(?:^|\s)REQUEST\s+(GET|HEAD|POST|PUT|PATCH|DELETE)\s+"((?:\\.|[^"])*)"""
     )
-    private val literalRegex = Regex("""(?i)^\s*(CONTENT|CONTENTTYPE|HEADER|COOKIE)\s+"((?:\\.|[^"])*)"""")
-    private val unsupportedModeRegex = Regex("""(?i)\b(BASICAUTH|MULTIPART|RAWDATA|RAW)\b""")
+    private val literalRegex = Regex(
+        """(?i)^\s*(CONTENT|CONTENTTYPE|HEADER|COOKIE)\s+"((?:\\.|[^"])*)""""
+    )
+    private val unsupportedModeRegex = Regex(
+        """(?i)\b(BASICAUTH|MULTIPART|RAWDATA|RAW)\b"""
+    )
 
     fun fromConfig(config: DesktopConfigCodec.DesktopConfig): Result<SafeRequestPreset> =
         runCatching { fromScript(config.script) }
@@ -94,7 +98,7 @@ object SafeRequestPresetParser {
 
     private fun unescapeLiteral(value: String): String =
         value
-            .replace("\\"", """)
+            .replace("\\\"", "\"")
             .replace("\\n", "\n")
             .replace("\\r", "\r")
             .replace("\\t", "\t")
