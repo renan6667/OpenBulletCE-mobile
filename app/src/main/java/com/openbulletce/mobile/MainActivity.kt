@@ -34,7 +34,6 @@ import com.openbulletce.mobile.data.ProxyCodec
 import com.openbulletce.mobile.data.RunnerDraft
 import com.openbulletce.mobile.network.AuthorizedHttpClient
 import com.openbulletce.mobile.network.SimpleRequest
-import com.openbulletce.mobile.security.AuthorizedTargetPolicy
 import com.openbulletce.mobile.ui.CookiesScreen
 import com.openbulletce.mobile.ui.CustomInputsEditor
 import com.openbulletce.mobile.ui.DataRulesEditor
@@ -147,31 +146,56 @@ private fun RunnerScreen() {
     val documentStore = remember { ConfigDocumentStore(context.contentResolver) }
     val scope = rememberCoroutineScope()
 
-    val initialDraft = remember { prefs.loadRunnerDraft() }
-    var method by remember { mutableStateOf(initialDraft.method) }
-    var url by remember { mutableStateOf(initialDraft.url) }
-    var headersText by remember { mutableStateOf(initialDraft.headersText) }
-    var body by remember { mutableStateOf(initialDraft.body) }
-    var selectedProxyId by remember { mutableStateOf(initialDraft.selectedProxyId) }
-    var proxyMenuExpanded by remember { mutableStateOf(false) }
-    var output by remember { mutableStateOf("Ready") }
-    var lastResponse by remember { mutableStateOf<String?>(null) }
+    val initial = remember { prefs.loadRunnerDraft() }
+    var configId by remember { mutableStateOf(initial.configId) }
+    var wordlistId by remember { mutableStateOf(initial.wordlistId) }
+    var selectedProxyId by remember { mutableStateOf(initial.selectedProxyId) }
+    var proxyMode by remember { mutableStateOf(initial.proxyMode) }
+    var botsAmount by remember { mutableStateOf(initial.botsAmount) }
+    var startingPoint by remember { mutableStateOf(initial.startingPoint.toString()) }
+
+    var configMenu by remember { mutableStateOf(false) }
+    var wordlistMenu by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("Idle") }
     var running by remember { mutableStateOf(false) }
+    var progressCount by remember { mutableStateOf(0) }
+    var lastResponse by remember { mutableStateOf("") }
 
-    val proxies = remember { managerStore.proxies() }
+    val configs = libraryStore.configs()
+    val wordlists = managerStore.wordlists()
+    val proxies = managerStore.proxies()
+    val hits = managerStore.hits()
+
+    val selectedConfigRecord = configs.firstOrNull { it.id == configId }
+    val selectedWordlist = wordlists.firstOrNull { it.id == wordlistId }
     val selectedProxy = proxies.firstOrNull { it.id == selectedProxyId }
-    val activeConfigId = prefs.loadActiveConfigId()
-    val activeConfigRecord = remember(activeConfigId) { libraryStore.find(activeConfigId) }
 
-    LaunchedEffect(method, url, headersText, body, selectedProxyId) {
-        delay(250)
+    val listSize = selectedWordlist?.totalLines ?: 0
+    val startValue = startingPoint.toIntOrNull()?.coerceAtLeast(1) ?: 1
+    val progressPercent = if (listSize <= 0) 0
+    else ((progressCount.coerceAtMost(listSize) * 100f) / listSize).toInt()
+
+    val configHits = hits.count {
+        selectedConfigRecord != null && it.configName == selectedConfigRecord.name
+    }
+
+    LaunchedEffect(
+        configId,
+        wordlistId,
+        selectedProxyId,
+        proxyMode,
+        botsAmount,
+        startingPoint
+    ) {
+        delay(200)
         prefs.saveRunnerDraft(
-            RunnerDraft(
-                method = method,
-                url = url,
-                headersText = headersText,
-                body = body,
-                selectedProxyId = selectedProxyId
+            prefs.loadRunnerDraft().copy(
+                configId = configId,
+                wordlistId = wordlistId,
+                selectedProxyId = selectedProxyId,
+                proxyMode = proxyMode,
+                botsAmount = botsAmount,
+                startingPoint = startValue
             )
         )
     }
@@ -182,190 +206,243 @@ private fun RunnerScreen() {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Text("Authorized request runner", fontWeight = FontWeight.Bold)
-        Text(
-            "Runner fields, selected proxy and active config are restored when the app opens again. Requests still require an explicitly authorized destination host.",
-            style = MaterialTheme.typography.bodySmall
-        )
+        Text("Runner", fontWeight = FontWeight.Bold)
 
-        activeConfigRecord?.let { record ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(
-                    Modifier.padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text("Active config: ${record.name}", fontWeight = FontWeight.SemiBold)
-                    if (record.author.isNotBlank()) Text(record.author)
-
-                    OutlinedButton(
-                        enabled = !running,
-                        onClick = {
-                            val config = libraryStore.loadSnapshot(record)
-                                ?: runCatching {
-                                    if (record.uri.isBlank()) null
-                                    else documentStore.read(Uri.parse(record.uri))
-                                }.getOrNull()
-
-                            if (config == null) {
-                                output = "ERROR: active config could not be reopened."
-                            } else {
-                                SafeRequestPresetParser.fromConfig(config)
-                                    .onSuccess { preset ->
-                                        method = preset.method
-                                        url = preset.url
-                                        headersText = preset.headers.entries
-                                            .joinToString("\n") { "${it.key}: ${it.value}" }
-                                        body = preset.body
-                                        output = "Loaded the first static REQUEST from ${record.name}. Full LoliScript was not executed."
-                                    }
-                                    .onFailure {
-                                        output = "Config is active, but its REQUEST cannot be loaded as a safe static preset: ${it.message}"
-                                    }
-                            }
-                        }
-                    ) {
-                        Text("Load REQUEST into Runner")
-                    }
-                }
-            }
-        }
-
-        OutlinedTextField(
-            method,
-            { method = it.uppercase().take(10) },
-            label = { Text("Method") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            url,
-            { url = it },
-            label = { Text("URL") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            headersText,
-            { headersText = it },
-            label = { Text("Headers — one Name: value per line") },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 3
-        )
-        OutlinedTextField(
-            body,
-            { body = it },
-            label = { Text("Body") },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 3
-        )
-
-        Text("Proxy", fontWeight = FontWeight.SemiBold)
-        Box {
-            OutlinedButton(onClick = { proxyMenuExpanded = true }) {
-                Text(
-                    selectedProxy?.let {
-                        ProxyCodec.displayMasked(it) + " • " + it.working
-                    } ?: "No proxy"
-                )
-            }
-            DropdownMenu(
-                expanded = proxyMenuExpanded,
-                onDismissRequest = { proxyMenuExpanded = false }
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                DropdownMenuItem(
-                    text = { Text("No proxy") },
-                    onClick = {
-                        selectedProxyId = ""
-                        proxyMenuExpanded = false
+                Text("Session", fontWeight = FontWeight.SemiBold)
+
+                Text("Config")
+                Box {
+                    OutlinedButton(onClick = { configMenu = true }) {
+                        Text(selectedConfigRecord?.name ?: "Select Config")
                     }
-                )
-                proxies.forEach { proxy ->
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                ProxyCodec.displayMasked(proxy) +
-                                    " • " + proxy.type + " • " + proxy.working
+                    DropdownMenu(
+                        expanded = configMenu,
+                        onDismissRequest = { configMenu = false }
+                    ) {
+                        configs.forEach { item ->
+                            DropdownMenuItem(
+                                text = { Text(item.name) },
+                                onClick = {
+                                    configId = item.id
+                                    prefs.saveActiveConfigId(item.id)
+                                    val config = libraryStore.loadSnapshot(item)
+                                    val suggested = config?.settings
+                                        ?.optInt("SuggestedBots", botsAmount)
+                                        ?.coerceIn(1, 200)
+                                    if (suggested != null) botsAmount = suggested
+                                    configMenu = false
+                                    status = "Config loaded"
+                                }
                             )
-                        },
-                        onClick = {
-                            selectedProxyId = proxy.id
-                            proxyMenuExpanded = false
                         }
-                    )
-                }
-            }
-        }
-
-        selectedProxy?.let { proxy ->
-            ProxyCodec.executionIssue(proxy)?.let { issue ->
-                Text(issue, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        Button(
-            enabled = !running && (selectedProxy == null || ProxyCodec.executionIssue(selectedProxy) == null),
-            onClick = {
-                running = true
-                output = "Running..."
-                val headers = headersText.lineSequence()
-                    .mapNotNull { line ->
-                        val split = line.indexOf(':')
-                        if (split <= 0) null
-                        else line.substring(0, split).trim() to line.substring(split + 1).trim()
                     }
-                    .toMap()
+                }
 
-                val policy = AuthorizedTargetPolicy(prefs.loadAuthorizedHosts().toSet())
-                val client = AuthorizedHttpClient(policy, prefs.loadTimeoutMs())
-
-                scope.launch {
-                    val result = client.execute(
-                        SimpleRequest(method, url, headers, body),
-                        selectedProxy
-                    )
-                    output = result.fold(
-                        onSuccess = {
-                            lastResponse = it.body.take(12_000)
-                            val suffix = if (it.truncated) {
-                                "\n\n[Response truncated by mobile safety limit]"
-                            } else {
-                                ""
+                Text("Wordlist")
+                Box {
+                    OutlinedButton(onClick = { wordlistMenu = true }) {
+                        Text(selectedWordlist?.name ?: "Select Wordlist")
+                    }
+                    DropdownMenu(
+                        expanded = wordlistMenu,
+                        onDismissRequest = { wordlistMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("None") },
+                            onClick = {
+                                wordlistId = ""
+                                wordlistMenu = false
                             }
-                            val proxyLine = selectedProxy?.let { p ->
-                                "\nProxy: ${ProxyCodec.displayMasked(p)}"
-                            }.orEmpty()
-                            "HTTP ${it.statusCode}$proxyLine\n\n${it.body.take(12_000)}$suffix"
-                        },
-                        onFailure = {
-                            lastResponse = null
-                            "ERROR: ${it.message}"
+                        )
+                        wordlists.forEach { item ->
+                            DropdownMenuItem(
+                                text = { Text(item.name) },
+                                onClick = {
+                                    wordlistId = item.id
+                                    wordlistMenu = false
+                                    status = "Wordlist selected"
+                                }
+                            )
                         }
+                    }
+                }
+
+                Text("Bots: $botsAmount")
+                Slider(
+                    value = botsAmount.toFloat(),
+                    onValueChange = { botsAmount = it.toInt().coerceIn(1, 200) },
+                    valueRange = 1f..200f,
+                    steps = 198
+                )
+
+                Text("Proxies")
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("DEFAULT" to "DEF", "ON" to "ON", "OFF" to "OFF")
+                        .forEach { (value, label) ->
+                            FilterChip(
+                                selected = proxyMode == value,
+                                onClick = { proxyMode = value },
+                                label = { Text(label) }
+                            )
+                        }
+                }
+
+                val useProxy = selectedConfigRecord?.let { record ->
+                    val cfg = libraryStore.loadSnapshot(record)
+                    val needs = cfg?.settings?.optBoolean("NeedsProxies", false) ?: false
+                    proxyMode == "ON" || (proxyMode == "DEFAULT" && needs)
+                } ?: (proxyMode == "ON")
+
+                if (useProxy) {
+                    Text(
+                        selectedProxy?.let {
+                            "Proxy: " + ProxyCodec.displayMasked(it)
+                        } ?: "Proxy: none selected — choose one in Proxy Manager",
+                        style = MaterialTheme.typography.bodySmall
                     )
-                    running = false
+                }
+
+                OutlinedTextField(
+                    value = startingPoint,
+                    onValueChange = {
+                        startingPoint = it.filter(Char::isDigit).take(9)
+                    },
+                    label = { Text("Start") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                LinearProgressIndicator(
+                    progress = { progressPercent / 100f },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Prog: $progressCount / $listSize ($progressPercent%)",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Button(
+                    enabled = !running && selectedConfigRecord != null,
+                    onClick = {
+                        val record = selectedConfigRecord ?: return@Button
+                        val config = libraryStore.loadSnapshot(record)
+                            ?: runCatching {
+                                if (record.uri.isBlank()) null
+                                else documentStore.read(Uri.parse(record.uri))
+                            }.getOrNull()
+
+                        if (config == null) {
+                            status = "Config could not be opened"
+                            return@Button
+                        }
+
+                        val presetResult = SafeRequestPresetParser.fromConfig(config)
+                        if (presetResult.isFailure) {
+                            status = "This config uses blocks that are not ported yet: " +
+                                (presetResult.exceptionOrNull()?.message ?: "unsupported script")
+                            return@Button
+                        }
+
+                        val needsProxy = config.settings.optBoolean("NeedsProxies", false)
+                        val useProxy = proxyMode == "ON" ||
+                            (proxyMode == "DEFAULT" && needsProxy)
+
+                        if (useProxy && selectedProxy == null) {
+                            status = "Select a proxy in Proxy Manager first"
+                            return@Button
+                        }
+                        if (useProxy && selectedProxy != null) {
+                            val issue = ProxyCodec.executionIssue(selectedProxy)
+                            if (issue != null) {
+                                status = issue
+                                return@Button
+                            }
+                        }
+
+                        val preset = presetResult.getOrThrow()
+                        running = true
+                        status = "Running"
+                        progressCount = if (listSize > 0) {
+                            startValue.coerceAtMost(listSize)
+                        } else {
+                            0
+                        }
+
+                        scope.launch {
+                            val client = AuthorizedHttpClient(prefs.loadTimeoutMs())
+                            val result = client.execute(
+                                SimpleRequest(
+                                    method = preset.method,
+                                    url = preset.url,
+                                    headers = preset.headers,
+                                    body = preset.body
+                                ),
+                                if (useProxy) selectedProxy else null
+                            )
+
+                            result
+                                .onSuccess { response ->
+                                    lastResponse = response.body.take(12_000)
+                                    status = "Completed — HTTP ${response.statusCode}"
+                                    if (listSize > 0) {
+                                        progressCount = (progressCount + 1).coerceAtMost(listSize)
+                                    }
+                                    managerStore.putHit(
+                                        HitRecord(
+                                            data = selectedWordlist?.name.orEmpty(),
+                                            captured = response.body.take(2_000),
+                                            proxy = if (useProxy) {
+                                                selectedProxy?.let(ProxyCodec::displayMasked).orEmpty()
+                                            } else {
+                                                ""
+                                            },
+                                            type = "CONFIG_REQUEST",
+                                            configName = record.name,
+                                            wordlistName = selectedWordlist?.name.orEmpty()
+                                        )
+                                    )
+                                }
+                                .onFailure {
+                                    lastResponse = ""
+                                    status = "ERROR: ${it.message}"
+                                }
+
+                            running = false
+                        }
+                    }
+                ) {
+                    Text(if (running) "RUNNING" else "START")
                 }
             }
-        ) {
-            Text(if (running) "Running" else "START")
         }
 
-        OutlinedButton(
-            enabled = lastResponse != null && !running,
-            onClick = {
-                managerStore.putHit(
-                    HitRecord(
-                        data = url,
-                        captured = lastResponse.orEmpty().take(2_000),
-                        proxy = selectedProxy?.let(ProxyCodec::displayMasked).orEmpty(),
-                        type = "MANUAL_HTTP",
-                        configName = activeConfigRecord?.name.orEmpty()
-                    )
-                )
-                output += "\n\nSaved to Hits DB."
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text("STATUS: $status", fontWeight = FontWeight.SemiBold)
+                Text("Hits: $configHits")
+                Text("Custom: 0")
+                Text("ToCheck: 0")
+                Text("CPM: 0")
             }
-        ) {
-            Text("Save result to Hits DB")
         }
 
-        HorizontalDivider()
-        Text(output)
+        if (lastResponse.isNotBlank()) {
+            Text("Last response", fontWeight = FontWeight.SemiBold)
+            Text(
+                lastResponse,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
     }
 }
 
@@ -892,7 +969,6 @@ private fun SettingsScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { AppPreferences(context) }
 
-    var hosts by remember { mutableStateOf(prefs.loadAuthorizedHosts().joinToString("\n")) }
     var timeout by remember { mutableStateOf(prefs.loadTimeoutMs().toString()) }
     var status by remember { mutableStateOf("") }
 
@@ -902,32 +978,27 @@ private fun SettingsScreen() {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Text("Safety / authorized targets", fontWeight = FontWeight.Bold)
+        Text("Settings", fontWeight = FontWeight.Bold)
         Text(
-            "Use an exact host (api.example.com). To authorize subdomains, use an explicit wildcard such as *.example.com.",
+            "Runner session, configs, wordlists, proxies, cookies and Hits are persisted automatically.",
             style = MaterialTheme.typography.bodySmall
         )
-        OutlinedTextField(
-            hosts,
-            { hosts = it },
-            label = { Text("Authorized hosts — one per line") },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 5
-        )
+
         OutlinedTextField(
             timeout,
             { timeout = it.filter(Char::isDigit) },
-            label = { Text("Timeout (ms)") },
+            label = { Text("Request timeout (ms)") },
             modifier = Modifier.fillMaxWidth()
         )
+
         Button(onClick = {
-            prefs.saveAuthorizedHosts(hosts.lines())
             prefs.saveTimeoutMs(timeout.toIntOrNull() ?: 15_000)
             status = "Saved"
         }) {
             Text("Save")
         }
-        Text(status)
+
+        if (status.isNotBlank()) Text(status)
     }
 }
 
