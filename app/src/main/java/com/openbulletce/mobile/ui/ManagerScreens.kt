@@ -213,26 +213,86 @@ fun HitsScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val store = remember { ManagerStore(context) }
     var records by remember { mutableStateOf(store.hits()) }
+    var search by remember { mutableStateOf("") }
+    var configFilter by remember { mutableStateOf("") }
+    var typeFilter by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("") }
 
     fun refresh() { records = store.hits() }
+
+    val filtered = remember(records, search, configFilter, typeFilter) {
+        records.filter { hit ->
+            val matchesSearch = search.isBlank() ||
+                hit.data.contains(search, ignoreCase = true) ||
+                hit.captured.contains(search, ignoreCase = true) ||
+                hit.proxy.contains(search, ignoreCase = true)
+
+            val matchesConfig = configFilter.isBlank() ||
+                hit.configName.equals(configFilter, ignoreCase = true)
+
+            val matchesType = typeFilter.isBlank() ||
+                hit.type.equals(typeFilter, ignoreCase = true)
+
+            matchesSearch && matchesConfig && matchesType
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Hits DB", fontWeight = FontWeight.Bold)
-            TextButton(
-                enabled = records.isNotEmpty(),
-                onClick = { store.clearHits(); refresh() }
-            ) { Text("Clear") }
-        }
+        Text("Hits DB", fontWeight = FontWeight.Bold)
         Text(
             "Results are stored locally only when you explicitly save them from the authorized Runner.",
             style = MaterialTheme.typography.bodySmall
         )
-        Text("Stored: ${records.size}")
-        records.forEach { hit ->
+
+        OutlinedTextField(
+            value = search,
+            onValueChange = { search = it },
+            label = { Text("Search data / capture / proxy") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = configFilter,
+            onValueChange = { configFilter = it },
+            label = { Text("Config filter (blank = all)") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = typeFilter,
+            onValueChange = { typeFilter = it },
+            label = { Text("Type filter (blank = all)") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                enabled = records.isNotEmpty(),
+                onClick = {
+                    val removed = store.removeDuplicateHits()
+                    refresh()
+                    status = if (removed == 0) "No duplicates found" else "Removed $removed duplicate hit(s)"
+                }
+            ) {
+                Text("Del. dupes")
+            }
+            OutlinedButton(
+                enabled = records.isNotEmpty(),
+                onClick = {
+                    store.clearHits()
+                    refresh()
+                    status = "Hits DB cleared"
+                }
+            ) {
+                Text("Purge")
+            }
+        }
+
+        if (status.isNotBlank()) Text(status)
+        Text("Showing: ${filtered.size} / ${records.size}")
+
+        filtered.forEach { hit ->
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(hit.type, fontWeight = FontWeight.SemiBold)
@@ -240,8 +300,14 @@ fun HitsScreen() {
                     if (hit.captured.isNotBlank()) Text("Capture: ${hit.captured}")
                     if (hit.configName.isNotBlank()) Text("Config: ${hit.configName}")
                     if (hit.wordlistName.isNotBlank()) Text("Wordlist: ${hit.wordlistName}")
+                    if (hit.proxy.isNotBlank()) Text("Proxy: ${hit.proxy}")
                     Text(DateFormat.getDateTimeInstance().format(Date(hit.dateEpochMs)))
-                    TextButton(onClick = { store.removeHit(hit.id); refresh() }) { Text("Remove") }
+                    TextButton(onClick = {
+                        store.removeHit(hit.id)
+                        refresh()
+                    }) {
+                        Text("Remove")
+                    }
                 }
             }
         }
