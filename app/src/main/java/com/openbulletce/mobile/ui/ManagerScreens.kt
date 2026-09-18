@@ -13,6 +13,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.openbulletce.mobile.data.*
+import com.openbulletce.mobile.network.AuthorizedHttpClient
+import com.openbulletce.mobile.network.SimpleRequest
+import com.openbulletce.mobile.security.AuthorizedTargetPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -23,8 +26,14 @@ import java.util.Date
 fun ProxiesScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val store = remember { ManagerStore(context) }
+    val prefs = remember { AppPreferences(context) }
+    val scope = rememberCoroutineScope()
+
     var records by remember { mutableStateOf(store.proxies()) }
     var raw by remember { mutableStateOf("") }
+    var testUrl by remember { mutableStateOf(prefs.loadProxyTestUrl()) }
+    var selectedProxyId by remember { mutableStateOf(prefs.loadRunnerDraft().selectedProxyId) }
+    var testingId by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf("") }
 
     fun refresh() { records = store.proxies() }
@@ -35,22 +44,37 @@ fun ProxiesScreen() {
     ) {
         Text("Proxy Manager", fontWeight = FontWeight.Bold)
         Text(
-            "Desktop-style proxy references are stored locally. Parsing supports (Http)/(Socks4)/(Socks4a)/(Socks5) and preserves chain text.",
+            "Proxies are saved locally. Tests and Runner traffic still require the destination host to be explicitly authorized in Settings.",
             style = MaterialTheme.typography.bodySmall
         )
+
         OutlinedTextField(
             raw,
             { raw = it },
             label = { Text("(Http)host:port:user:pass") },
             modifier = Modifier.fillMaxWidth()
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+        OutlinedTextField(
+            testUrl,
+            {
+                testUrl = it
+                prefs.saveProxyTestUrl(it)
+            },
+            label = { Text("Authorized URL used to test proxies") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Button(onClick = {
                 val parsed = ProxyCodec.parse(raw)
                 if (parsed.proxy != null) {
                     store.putProxy(parsed.proxy)
                     raw = ""
-                    status = "Proxy added"
+                    status = "Proxy added and saved"
                     refresh()
                 } else {
                     status = parsed.error.orEmpty()
@@ -58,27 +82,135 @@ fun ProxiesScreen() {
             }) { Text("Add") }
 
             OutlinedButton(
-                enabled = records.isNotEmpty(),
+                enabled = records.isNotEmpty() && testingId == null,
                 onClick = {
                     store.clearProxies()
+                    selectedProxyId = ""
+                    prefs.saveRunnerDraft(
+                        prefs.loadRunnerDraft().copy(selectedProxyId = "")
+                    )
                     refresh()
                     status = "Proxy list cleared"
                 }
             ) { Text("Clear") }
         }
+
         if (status.isNotBlank()) Text(status)
 
         HorizontalDivider()
         Text("Stored: ${records.size}")
+
         records.forEach { proxy ->
+            val issue = ProxyCodec.executionIssue(proxy)
+            val selected = proxy.id == selectedProxyId
+
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(ProxyCodec.displayMasked(proxy), fontWeight = FontWeight.SemiBold)
-                    Text("${proxy.type} • ${proxy.working}" + if (proxy.pingMs > 0) " • ${proxy.pingMs} ms" else "")
-                    TextButton(onClick = {
-                        store.removeProxy(proxy.id)
-                        refresh()
-                    }) { Text("Remove") }
+                Column(
+                    Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        ProxyCodec.displayMasked(proxy),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "${proxy.type} • ${proxy.working}" +
+                            if (proxy.pingMs > 0) " • ${proxy.pingMs} ms" else ""
+                    )
+                    if (selected) {
+                        Text(
+                            "Selected for Runner",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                    issue?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            enabled = testingId == null && issue == null && testUrl.isNotBlank(),
+                            onClick = {
+                                testingId = proxy.id
+                                status = "Testing proxy against authorized URL..."
+                                prefs.saveProxyTestUrl(testUrl)
+
+                                scope.launch {
+                                    val policy = AuthorizedTargetPolicy(
+                                        prefs.loadAuthorizedHosts().toSet()
+                                    )
+                                    val client = AuthorizedHttpClient(
+                                        policy,
+                                        prefs.loadTimeoutMs()
+                                    )
+                                    val started = System.nanoTime()
+                                    val result = client.execute(
+                                        SimpleRequest("GET", testUrl),
+                                        proxy
+                                    )
+                                    val ping = ((System.nanoTime() - started) / 1_000_000L)
+                                        .coerceAtMost(Int.MAX_VALUE.toLong())
+                                        .toInt()
+
+                                    val updated = if (result.isSuccess) {
+                                        proxy.copy(working = "WORKING", pingMs = ping)
+                                    } else {
+                                        proxy.copy(working = "FAILED", pingMs = ping)
+                                    }
+                                    store.putProxy(updated)
+                                    refresh()
+                                    status = result.fold(
+                                        onSuccess = {
+                                            "Proxy working: HTTP ${it.statusCode} in ${ping} ms"
+                                        },
+                                        onFailure = {
+                                            "Proxy test failed: ${it.message}"
+                                        }
+                                    )
+                                    testingId = null
+                                }
+                            }
+                        ) {
+                            Text(if (testingId == proxy.id) "Testing..." else "Test")
+                        }
+
+                        Button(onClick = {
+                            selectedProxyId = proxy.id
+                            prefs.saveRunnerDraft(
+                                prefs.loadRunnerDraft().copy(selectedProxyId = proxy.id)
+                            )
+                            status = "Proxy selected for Runner"
+                        }) {
+                            Text(if (selected) "Selected" else "Use in Runner")
+                        }
+
+                        if (selected) {
+                            OutlinedButton(onClick = {
+                                selectedProxyId = ""
+                                prefs.saveRunnerDraft(
+                                    prefs.loadRunnerDraft().copy(selectedProxyId = "")
+                                )
+                                status = "Runner will connect without a proxy"
+                            }) {
+                                Text("Disable")
+                            }
+                        }
+
+                        TextButton(onClick = {
+                            store.removeProxy(proxy.id)
+                            if (selectedProxyId == proxy.id) {
+                                selectedProxyId = ""
+                                prefs.saveRunnerDraft(
+                                    prefs.loadRunnerDraft().copy(selectedProxyId = "")
+                                )
+                            }
+                            refresh()
+                        }) { Text("Remove") }
+                    }
                 }
             }
         }
