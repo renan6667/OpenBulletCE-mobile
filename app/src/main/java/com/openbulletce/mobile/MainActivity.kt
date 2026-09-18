@@ -18,9 +18,15 @@ import androidx.compose.ui.unit.dp
 import com.openbulletce.mobile.config.ConfigDocumentStore
 import com.openbulletce.mobile.config.DesktopConfigCodec
 import com.openbulletce.mobile.data.AppPreferences
+import com.openbulletce.mobile.data.HitRecord
+import com.openbulletce.mobile.data.ManagerStore
 import com.openbulletce.mobile.network.AuthorizedHttpClient
 import com.openbulletce.mobile.network.SimpleRequest
 import com.openbulletce.mobile.security.AuthorizedTargetPolicy
+import com.openbulletce.mobile.ui.CookiesScreen
+import com.openbulletce.mobile.ui.HitsScreen
+import com.openbulletce.mobile.ui.ProxiesScreen
+import com.openbulletce.mobile.ui.WordlistsScreen
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -88,7 +94,11 @@ private fun OpenBulletMobileApp() {
                 ) {
                     when (section) {
                         Section.RUNNER -> RunnerScreen()
+                        Section.PROXIES -> ProxiesScreen()
+                        Section.WORDLISTS -> WordlistsScreen()
+                        Section.COOKIES -> CookiesScreen()
                         Section.CONFIGS -> ConfigScreen()
+                        Section.HITS -> HitsScreen()
                         Section.SETTINGS -> SettingsScreen()
                         Section.ABOUT -> AboutScreen()
                         else -> PortPlaceholder(section.label)
@@ -103,6 +113,7 @@ private fun OpenBulletMobileApp() {
 private fun RunnerScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { AppPreferences(context) }
+    val managerStore = remember { ManagerStore(context) }
     val scope = rememberCoroutineScope()
 
     var method by remember { mutableStateOf("GET") }
@@ -110,6 +121,7 @@ private fun RunnerScreen() {
     var headersText by remember { mutableStateOf("Accept: */*") }
     var body by remember { mutableStateOf("") }
     var output by remember { mutableStateOf("Ready") }
+    var lastResponse by remember { mutableStateOf<String?>(null) }
     var running by remember { mutableStateOf(false) }
 
     Column(
@@ -153,14 +165,36 @@ private fun RunnerScreen() {
                 scope.launch {
                     val result = client.execute(SimpleRequest(method, url, headers, body))
                     output = result.fold(
-                        onSuccess = { "HTTP ${it.statusCode}\n\n${it.body.take(12_000)}" },
-                        onFailure = { "ERROR: ${it.message}" }
+                        onSuccess = {
+                            lastResponse = it.body.take(12_000)
+                            "HTTP ${it.statusCode}\n\n${it.body.take(12_000)}"
+                        },
+                        onFailure = {
+                            lastResponse = null
+                            "ERROR: ${it.message}"
+                        }
                     )
                     running = false
                 }
             }
         ) {
             Text(if (running) "Running" else "START")
+        }
+
+        OutlinedButton(
+            enabled = lastResponse != null && !running,
+            onClick = {
+                managerStore.putHit(
+                    HitRecord(
+                        data = url,
+                        captured = lastResponse.orEmpty().take(2_000),
+                        type = "MANUAL_HTTP"
+                    )
+                )
+                output += "\n\nSaved to Hits DB."
+            }
+        ) {
+            Text("Save result to Hits DB")
         }
 
         HorizontalDivider()
