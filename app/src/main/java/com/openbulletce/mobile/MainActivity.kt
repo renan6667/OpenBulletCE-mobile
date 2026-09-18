@@ -374,9 +374,12 @@ private fun ConfigScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val store = remember { ConfigDocumentStore(context.contentResolver) }
     val libraryStore = remember { ConfigLibraryStore(context) }
+    val prefs = remember { AppPreferences(context) }
 
     var library by remember { mutableStateOf(libraryStore.configs()) }
     var loaded by remember { mutableStateOf<DesktopConfigCodec.DesktopConfig?>(null) }
+    var currentRecordId by remember { mutableStateOf<String?>(null) }
+    var activeConfigId by remember { mutableStateOf(prefs.loadActiveConfigId()) }
     var name by remember { mutableStateOf("") }
     var author by remember { mutableStateOf("") }
     var version by remember { mutableStateOf("1.2.2") }
@@ -411,8 +414,13 @@ private fun ConfigScreen() {
         library = libraryStore.configs()
     }
 
-    fun loadForEditing(config: DesktopConfigCodec.DesktopConfig, message: String) {
+    fun loadForEditing(
+        config: DesktopConfigCodec.DesktopConfig,
+        message: String,
+        recordId: String? = null
+    ) {
         loaded = config
+        currentRecordId = recordId
         name = config.name
         author = config.author
         version = config.settings.optString("Version", "1.2.2")
@@ -445,21 +453,26 @@ private fun ConfigScreen() {
         status = message
     }
 
-    fun rememberImportedConfig(uri: Uri, config: DesktopConfigCodec.DesktopConfig) {
+    fun rememberImportedConfig(
+        uri: Uri,
+        config: DesktopConfigCodec.DesktopConfig
+    ): ConfigLibraryRecord {
         runCatching {
             context.contentResolver.takePersistableUriPermission(
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
         }
-        libraryStore.put(
-            ConfigLibraryRecord(
-                name = config.name,
-                author = config.author,
-                uri = uri.toString()
-            )
+        val record = libraryStore.upsertForUri(
+            name = config.name,
+            author = config.author,
+            uri = uri.toString()
         )
+        libraryStore.saveSnapshot(record, config)
+        prefs.saveActiveConfigId(record.id)
+        activeConfigId = record.id
         refreshLibrary()
+        return record
     }
 
     fun workingConfig(): DesktopConfigCodec.DesktopConfig? {
@@ -515,8 +528,12 @@ private fun ConfigScreen() {
         if (uri != null) {
             runCatching { store.read(uri) }
                 .onSuccess {
-                    loadForEditing(it, "Loaded: ${it.name}")
-                    rememberImportedConfig(uri, it)
+                    val record = rememberImportedConfig(uri, it)
+                    loadForEditing(
+                        it,
+                        "Imported, saved locally and selected for Runner: ${it.name}",
+                        record.id
+                    )
                 }
                 .onFailure { status = "Import error: ${it.message}" }
         }
@@ -534,6 +551,42 @@ private fun ConfigScreen() {
     }
 
     val working = workingConfig()
+
+    LaunchedEffect(
+        currentRecordId,
+        name,
+        author,
+        version,
+        additionalInfo,
+        saveEmptyCaptures,
+        continueOnCustom,
+        ignoreResponseErrors,
+        maxRedirects,
+        allowedWordlist1,
+        allowedWordlist2,
+        encodeData,
+        customInputs,
+        dataRules,
+        script
+    ) {
+        val id = currentRecordId ?: return@LaunchedEffect
+        delay(350)
+        val record = libraryStore.find(id) ?: return@LaunchedEffect
+        val snapshot = workingConfig() ?: return@LaunchedEffect
+
+        libraryStore.saveSnapshot(record, snapshot)
+
+        if (record.name != snapshot.name || record.author != snapshot.author) {
+            libraryStore.put(
+                record.copy(
+                    name = snapshot.name,
+                    author = snapshot.author
+                )
+            )
+            refreshLibrary()
+        }
+    }
+
     val compatibility = working?.let { ConfigCompatibility.analyze(it) }
     val scriptReport = remember(script) { LoliScriptInspector.inspect(script) }
 
@@ -564,7 +617,19 @@ private fun ConfigScreen() {
                         .put("Version", "1.2.2"),
                     script = ""
                 )
-                loadForEditing(fresh, "New desktop-compatible config")
+                val record = ConfigLibraryRecord(
+                    name = fresh.name,
+                    author = fresh.author,
+                    uri = ""
+                )
+                libraryStore.put(record)
+                libraryStore.saveSnapshot(record, fresh)
+                loadForEditing(
+                    fresh,
+                    "New config saved locally",
+                    record.id
+                )
+                refreshLibrary()
             }) {
                 Text("New")
             }
@@ -587,10 +652,11 @@ private fun ConfigScreen() {
         if (library.isNotEmpty()) {
             Text("Config library", fontWeight = FontWeight.Bold)
             Text(
-                "Imported .lce documents kept through Android document permissions.",
+                "Configs are copied into app-local storage, so they can be reopened even if the original document provider later changes.",
                 style = MaterialTheme.typography.bodySmall
             )
             library.forEach { item ->
+                val isActive = item.id == activeConfigId
                 Card(Modifier.fillMaxWidth()) {
                     Column(
                         Modifier.padding(10.dp),
@@ -598,12 +664,34 @@ private fun ConfigScreen() {
                     ) {
                         Text(item.name, fontWeight = FontWeight.SemiBold)
                         if (item.author.isNotBlank()) Text(item.author)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (isActive) {
+                            Text(
+                                "Active in Runner",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             TextButton(onClick = {
                                 runCatching {
-                                    val uri = Uri.parse(item.uri)
-                                    val config = store.read(uri)
-                                    loadForEditing(config, "Loaded: ${config.name}")
+                                    val config = libraryStore.loadSnapshot(item)
+                                        ?: if (item.uri.isBlank()) {
+                                            error("No local snapshot or source URI")
+                                        } else {
+                                            store.read(Uri.parse(item.uri)).also {
+                                                libraryStore.saveSnapshot(item, it)
+                                            }
+                                        }
+
+                                    loadForEditing(
+                                        config,
+                                        "Loaded: ${config.name}",
+                                        item.id
+                                    )
                                     libraryStore.touch(
                                         item.copy(
                                             name = config.name,
@@ -617,8 +705,25 @@ private fun ConfigScreen() {
                             }) {
                                 Text("Open")
                             }
+
+                            Button(onClick = {
+                                prefs.saveActiveConfigId(item.id)
+                                activeConfigId = item.id
+                                status = "${item.name} selected for Runner"
+                            }) {
+                                Text(if (isActive) "Active" else "Use in Runner")
+                            }
+
                             TextButton(onClick = {
                                 libraryStore.remove(item.id)
+                                if (activeConfigId == item.id) {
+                                    prefs.saveActiveConfigId("")
+                                    activeConfigId = ""
+                                }
+                                if (currentRecordId == item.id) {
+                                    currentRecordId = null
+                                    loaded = null
+                                }
                                 refreshLibrary()
                             }) {
                                 Text("Forget")
@@ -767,7 +872,11 @@ private fun ConfigScreen() {
 
             Text("Compatibility report", fontWeight = FontWeight.Bold)
             Text("PC ↔ Android round-trip: preserved")
-            Text("Imported LoliScript execution on Android: disabled")
+            Text("Full LoliScript execution: disabled")
+            Text(
+                "Runner can load the first static REQUEST from the active config; unsupported/dynamic blocks remain preserved.",
+                style = MaterialTheme.typography.bodySmall
+            )
             compatibility?.issues?.forEach { issue ->
                 Text(
                     "• ${issue.keyword}: ${issue.message}",
