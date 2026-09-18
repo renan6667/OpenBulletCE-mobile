@@ -19,6 +19,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.openbulletce.mobile.config.ConfigCompatibility
 import com.openbulletce.mobile.config.ConfigDocumentStore
+import com.openbulletce.mobile.config.CustomInputSpec
+import com.openbulletce.mobile.config.DataRuleSpec
+import com.openbulletce.mobile.config.DesktopConfigCollections
 import com.openbulletce.mobile.config.DesktopConfigCodec
 import com.openbulletce.mobile.config.LoliScriptInspector
 import com.openbulletce.mobile.data.AppPreferences
@@ -30,6 +33,8 @@ import com.openbulletce.mobile.network.AuthorizedHttpClient
 import com.openbulletce.mobile.network.SimpleRequest
 import com.openbulletce.mobile.security.AuthorizedTargetPolicy
 import com.openbulletce.mobile.ui.CookiesScreen
+import com.openbulletce.mobile.ui.CustomInputsEditor
+import com.openbulletce.mobile.ui.DataRulesEditor
 import com.openbulletce.mobile.ui.HitsScreen
 import com.openbulletce.mobile.ui.PluginsScreen
 import com.openbulletce.mobile.ui.ToolsScreen
@@ -234,6 +239,8 @@ private fun ConfigScreen() {
     var allowedWordlist1 by remember { mutableStateOf("") }
     var allowedWordlist2 by remember { mutableStateOf("") }
     var encodeData by remember { mutableStateOf(false) }
+    var customInputs by remember { mutableStateOf<List<CustomInputSpec>>(emptyList()) }
+    var dataRules by remember { mutableStateOf<List<DataRuleSpec>>(emptyList()) }
     var script by remember { mutableStateOf("") }
     var baselineName by remember { mutableStateOf("") }
     var baselineAuthor by remember { mutableStateOf("") }
@@ -244,6 +251,8 @@ private fun ConfigScreen() {
     var baselineAllowedWordlist1 by remember { mutableStateOf("") }
     var baselineAllowedWordlist2 by remember { mutableStateOf("") }
     var baselineEncodeData by remember { mutableStateOf(false) }
+    var baselineCustomInputs by remember { mutableStateOf<List<CustomInputSpec>>(emptyList()) }
+    var baselineDataRules by remember { mutableStateOf<List<DataRuleSpec>>(emptyList()) }
     var baselineScript by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("No desktop config loaded") }
 
@@ -262,6 +271,8 @@ private fun ConfigScreen() {
         allowedWordlist1 = config.settings.optString("AllowedWordlist1")
         allowedWordlist2 = config.settings.optString("AllowedWordlist2")
         encodeData = config.settings.optBoolean("EncodeData", false)
+        customInputs = DesktopConfigCollections.customInputs(config.settings)
+        dataRules = DesktopConfigCollections.dataRules(config.settings)
         script = config.script
 
         baselineName = name
@@ -273,6 +284,8 @@ private fun ConfigScreen() {
         baselineAllowedWordlist1 = allowedWordlist1
         baselineAllowedWordlist2 = allowedWordlist2
         baselineEncodeData = encodeData
+        baselineCustomInputs = customInputs
+        baselineDataRules = dataRules
         baselineScript = script
         status = message
     }
@@ -315,6 +328,12 @@ private fun ConfigScreen() {
             changes["AllowedWordlist2"] = allowedWordlist2
         }
         if (encodeData != baselineEncodeData) changes["EncodeData"] = encodeData
+        if (customInputs != baselineCustomInputs) {
+            changes["CustomInputs"] = DesktopConfigCollections.customInputsJson(customInputs)
+        }
+        if (dataRules != baselineDataRules) {
+            changes["DataRules"] = DesktopConfigCollections.dataRulesJson(dataRules)
+        }
 
         val withSettings = if (changes.isEmpty()) {
             base
@@ -517,6 +536,16 @@ private fun ConfigScreen() {
             Text(
                 "SuggestedBots, MaxCPM, proxy and Selenium fields are preserved from PC but are not used to enable automated behavior on Android.",
                 style = MaterialTheme.typography.bodySmall
+            )
+
+            CustomInputsEditor(
+                values = customInputs,
+                onChange = { customInputs = it }
+            )
+
+            DataRulesEditor(
+                values = dataRules,
+                onChange = { dataRules = it }
             )
 
             OutlinedTextField(
