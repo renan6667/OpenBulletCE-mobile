@@ -73,7 +73,7 @@ fun ProxiesScreen() {
         records.forEach { proxy ->
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(proxy.raw, fontWeight = FontWeight.SemiBold)
+                    Text(ProxyCodec.displayMasked(proxy), fontWeight = FontWeight.SemiBold)
                     Text("${proxy.type} • ${proxy.working}" + if (proxy.pingMs > 0) " • ${proxy.pingMs} ms" else "")
                     TextButton(onClick = {
                         store.removeProxy(proxy.id)
