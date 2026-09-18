@@ -6,6 +6,12 @@ object ProxyCodec {
         val error: String? = null
     )
 
+    fun displayMasked(proxy: ProxyRecord): String {
+        if (proxy.password.isBlank()) return proxy.raw
+        val credentialTail = ":${proxy.username}:${proxy.password}"
+        return proxy.raw.replace(credentialTail, ":${proxy.username}:••••")
+    }
+
     fun parse(rawInput: String): ParseResult {
         val original = rawInput.trim()
         if (original.isBlank()) return ParseResult(error = "Proxy is empty")
