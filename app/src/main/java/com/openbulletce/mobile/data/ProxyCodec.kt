@@ -21,9 +21,18 @@ object ProxyCodec {
     }
 
     fun executionIssue(proxy: ProxyRecord): String? {
-        if (proxy.banned || proxy.working == "BANNED") {
-            return proxy.banReason.ifBlank { "Proxy is locally banned." }
+        if (proxy.status != MobileProxyStatus.AVAILABLE) {
+            return when (proxy.status) {
+                MobileProxyStatus.BUSY -> "Proxy is busy."
+                MobileProxyStatus.BAD -> proxy.banReason.ifBlank { "Proxy is marked BAD." }
+                MobileProxyStatus.BANNED -> proxy.banReason.ifBlank { "Proxy is BANNED." }
+                MobileProxyStatus.AVAILABLE -> null
+            }
         }
+        return transportIssue(proxy)
+    }
+
+    fun transportIssue(proxy: ProxyRecord): String? {
         if ("->" in proxy.raw) {
             return "Proxy chains are stored for compatibility but are not executable on Android yet."
         }
