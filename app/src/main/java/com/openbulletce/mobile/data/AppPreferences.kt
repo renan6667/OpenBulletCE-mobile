@@ -115,6 +115,13 @@ class AppPreferences(context: Context) {
         prefs.edit().putInt("proxy_checker_bots", value.coerceIn(1, 200)).apply()
     }
 
+    fun loadProxyBanRetryLimit(): Int =
+        prefs.getInt("proxy_ban_retry_limit", 3).coerceIn(1, 20)
+
+    fun saveProxyBanRetryLimit(value: Int) {
+        prefs.edit().putInt("proxy_ban_retry_limit", value.coerceIn(1, 20)).apply()
+    }
+
     fun loadLastSection(): String = prefs.getString("last_section", "RUNNER").orEmpty()
 
     fun saveLastSection(section: String) {
