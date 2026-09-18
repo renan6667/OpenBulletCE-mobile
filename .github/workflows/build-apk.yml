@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   push:
     branches: [ "main", "port/v1-android" ]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
