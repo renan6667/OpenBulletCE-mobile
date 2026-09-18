@@ -536,6 +536,10 @@ private fun SettingsScreen() {
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text("Safety / authorized targets", fontWeight = FontWeight.Bold)
+        Text(
+            "Use an exact host (api.example.com). To authorize subdomains, use an explicit wildcard such as *.example.com.",
+            style = MaterialTheme.typography.bodySmall
+        )
         OutlinedTextField(
             hosts,
             { hosts = it },
