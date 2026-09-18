@@ -13,6 +13,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.openbulletce.mobile.data.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 
@@ -87,39 +90,82 @@ fun WordlistsScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val resolver = context.contentResolver
     val store = remember { ManagerStore(context) }
+    val scope = rememberCoroutineScope()
+
     var records by remember { mutableStateOf(store.wordlists()) }
+    var search by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
+    var importing by remember { mutableStateOf(false) }
 
     fun refresh() { records = store.wordlists() }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            runCatching {
-                resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                var name = "wordlist"
-                resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        name = cursor.getString(0) ?: name
+            importing = true
+            status = "Reading wordlist..."
+            scope.launch {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            resolver.takePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        }
+
+                        var name = "wordlist"
+                        resolver.query(
+                            uri,
+                            arrayOf(OpenableColumns.DISPLAY_NAME),
+                            null,
+                            null,
+                            null
+                        )?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                name = cursor.getString(0) ?: name
+                            }
+                        }
+
+                        val total = resolver.openInputStream(uri)
+                            ?.bufferedReader()
+                            ?.use { reader ->
+                                var count = 0
+                                while (count < Int.MAX_VALUE && reader.readLine() != null) {
+                                    count++
+                                }
+                                count
+                            }
+                            ?: 0
+
+                        WordlistRecord(
+                            name = name.substringBeforeLast('.', name),
+                            uri = uri.toString(),
+                            totalLines = total
+                        )
                     }
                 }
-                val total = resolver.openInputStream(uri)?.bufferedReader()?.use { reader ->
-                    var count = 0
-                    while (reader.readLine() != null) count++
-                    count
-                } ?: 0
 
-                store.putWordlist(
-                    WordlistRecord(
-                        name = name,
-                        uri = uri.toString(),
-                        totalLines = total
-                    )
-                )
-                refresh()
-                status = "Imported $name ($total lines)"
-            }.onFailure {
-                status = "Import error: ${it.message}"
+                result
+                    .onSuccess { item ->
+                        store.putWordlist(item)
+                        refresh()
+                        status = "Imported ${item.name} (${item.totalLines} lines)"
+                    }
+                    .onFailure {
+                        status = "Import error: ${it.message}"
+                    }
+
+                importing = false
             }
+        }
+    }
+
+    val filtered = remember(records, search) {
+        if (search.isBlank()) records
+        else records.filter {
+            it.name.contains(search, ignoreCase = true) ||
+                it.type.contains(search, ignoreCase = true) ||
+                it.purpose.contains(search, ignoreCase = true)
         }
     }
 
@@ -129,25 +175,93 @@ fun WordlistsScreen() {
     ) {
         Text("Wordlist Manager", fontWeight = FontWeight.Bold)
         Text(
-            "Android keeps a persistent document URI instead of a Windows filesystem path.",
+            "Android keeps a persistent document URI instead of a Windows filesystem path. Type and Purpose mirror the desktop metadata.",
             style = MaterialTheme.typography.bodySmall
         )
-        Button(onClick = { picker.launch(arrayOf("text/*", "application/octet-stream")) }) {
-            Text("Import wordlist")
+
+        Button(
+            enabled = !importing,
+            onClick = { picker.launch(arrayOf("text/*", "application/octet-stream")) }
+        ) {
+            Text(if (importing) "Importing..." else "Import wordlist")
         }
+
+        OutlinedTextField(
+            value = search,
+            onValueChange = { search = it },
+            label = { Text("Search wordlists") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
         if (status.isNotBlank()) Text(status)
         HorizontalDivider()
-        Text("Stored: ${records.size}")
-        records.forEach { item ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(item.name, fontWeight = FontWeight.SemiBold)
-                    Text("${item.type} • ${item.totalLines} lines")
-                    if (item.purpose.isNotBlank()) Text(item.purpose)
-                    TextButton(onClick = {
-                        store.removeWordlist(item.id)
-                        refresh()
-                    }) { Text("Remove") }
+        Text("Showing: ${filtered.size} / ${records.size}")
+
+        filtered.forEach { item ->
+            WordlistCard(
+                item = item,
+                onSave = { updated ->
+                    store.putWordlist(updated)
+                    refresh()
+                    status = "Updated ${updated.name}"
+                },
+                onRemove = {
+                    store.removeWordlist(item.id)
+                    refresh()
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun WordlistCard(
+    item: WordlistRecord,
+    onSave: (WordlistRecord) -> Unit,
+    onRemove: () -> Unit
+) {
+    var name by remember(item.id, item.name) { mutableStateOf(item.name) }
+    var type by remember(item.id, item.type) { mutableStateOf(item.type) }
+    var purpose by remember(item.id, item.purpose) { mutableStateOf(item.purpose) }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Name") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = type,
+                onValueChange = { type = it },
+                label = { Text("Type") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = purpose,
+                onValueChange = { purpose = it },
+                label = { Text("Purpose") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text("${item.totalLines} lines", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    onSave(
+                        item.copy(
+                            name = name.trim().ifBlank { item.name },
+                            type = type.trim().ifBlank { "Default" },
+                            purpose = purpose.trim()
+                        )
+                    )
+                }) {
+                    Text("Save")
+                }
+                TextButton(onClick = onRemove) {
+                    Text("Remove")
                 }
             }
         }
