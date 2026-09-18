@@ -34,4 +34,33 @@ class ProxyCodecTest {
         assertTrue(ProxyCodec.executionIssue(socks4)!!.contains("SOCKS4"))
         assertTrue(ProxyCodec.executionIssue(chain)!!.contains("chains"))
     }
+
+    @Test
+    fun checkerFailureDoesNotBecomeRunnerBadOrBanned() {
+        val proxy = ProxyCodec.parse("(Http)127.0.0.1:8080").proxy!!
+            .copy(
+                working = "FAILED",
+                status = MobileProxyStatus.AVAILABLE
+            )
+
+        assertNull(ProxyCodec.executionIssue(proxy))
+    }
+
+    @Test
+    fun runnerBadAndBannedStatesBlockExecution() {
+        val base = ProxyCodec.parse("(Http)127.0.0.1:8080").proxy!!
+        val bad = base.copy(
+            status = MobileProxyStatus.BAD,
+            banReason = "Connection error"
+        )
+        val banned = base.copy(
+            status = MobileProxyStatus.BANNED,
+            banReason = "BAN status"
+        )
+
+        assertTrue(ProxyCodec.executionIssue(bad)!!.contains("Connection error"))
+        assertTrue(ProxyCodec.executionIssue(banned)!!.contains("BAN status"))
+        assertNull(ProxyCodec.transportIssue(bad))
+        assertNull(ProxyCodec.transportIssue(banned))
+    }
 }
