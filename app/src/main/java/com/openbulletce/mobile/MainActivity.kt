@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.openbulletce.mobile.config.ConfigCompatibility
 import com.openbulletce.mobile.config.ConfigDocumentStore
 import com.openbulletce.mobile.config.DesktopConfigCodec
 import com.openbulletce.mobile.data.AppPreferences
@@ -224,7 +225,7 @@ private fun ConfigScreen() {
     }
 
     val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("text/plain")
+        ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
         val config = loaded
         if (uri != null && config != null) {
@@ -256,7 +257,7 @@ private fun ConfigScreen() {
                         ?.replace(Regex("[^A-Za-z0-9._-]"), "_")
                         ?.ifBlank { "config" }
                         ?: "config"
-                    exportLauncher.launch("$name.loli")
+                    exportLauncher.launch("$name.lce")
                 }
             ) {
                 Text("Export")
@@ -266,6 +267,7 @@ private fun ConfigScreen() {
         Text(status)
 
         loaded?.let { config ->
+            val report = ConfigCompatibility.analyze(config)
             HorizontalDivider()
             Text("Name: ${config.name}")
             if (config.author.isNotBlank()) Text("Author: ${config.author}")
@@ -273,6 +275,15 @@ private fun ConfigScreen() {
             Text(config.settings.toString(2))
             Text("LoliScript", fontWeight = FontWeight.Bold)
             Text(config.script.ifBlank { "(empty)" })
+            Text("Compatibility report", fontWeight = FontWeight.Bold)
+            Text("PC ↔ Android round-trip: preserved")
+            Text("Imported LoliScript execution on Android: disabled")
+            report.issues.forEach { issue ->
+                Text(
+                    "• ${issue.keyword}: ${issue.message}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }
