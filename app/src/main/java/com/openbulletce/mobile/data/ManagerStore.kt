@@ -77,6 +77,59 @@ class ManagerStore(context: Context) {
         saveArray("proxies", next.map(::proxyJson))
     }
 
+    fun markProxyWorking(id: String, pingMs: Int): ProxyRecord? {
+        val current = proxies().firstOrNull { it.id == id } ?: return null
+        if (current.banned) return current
+
+        val updated = current.copy(
+            working = "WORKING",
+            pingMs = pingMs,
+            consecutiveFailures = 0,
+            banReason = ""
+        )
+        putProxy(updated)
+        return updated
+    }
+
+    fun recordProxyRetry(
+        id: String,
+        reason: String,
+        banAfter: Int
+    ): ProxyRecord? {
+        val current = proxies().firstOrNull { it.id == id } ?: return null
+        if (current.banned) return current
+
+        val retries = current.retryCount + 1
+        val failures = current.consecutiveFailures + 1
+        val shouldBan = failures >= banAfter.coerceAtLeast(1)
+
+        val updated = current.copy(
+            retryCount = retries,
+            consecutiveFailures = failures,
+            banned = shouldBan,
+            working = if (shouldBan) "BANNED" else "FAILED",
+            banReason = if (shouldBan) {
+                "Retry limit reached ($failures): $reason"
+            } else {
+                ""
+            }
+        )
+        putProxy(updated)
+        return updated
+    }
+
+    fun unbanProxy(id: String): ProxyRecord? {
+        val current = proxies().firstOrNull { it.id == id } ?: return null
+        val updated = current.copy(
+            banned = false,
+            banReason = "",
+            consecutiveFailures = 0,
+            working = "UNTESTED"
+        )
+        putProxy(updated)
+        return updated
+    }
+
     fun removeProxy(id: String) =
         saveArray("proxies", proxies().filterNot { it.id == id }.map(::proxyJson))
 
