@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 enum class MobileProxyType { HTTP, SOCKS4, SOCKS4A, SOCKS5 }
+enum class MobileProxyStatus { AVAILABLE, BUSY, BAD, BANNED }
 
 data class ProxyRecord(
     val id: String = UUID.randomUUID().toString(),
@@ -16,11 +17,17 @@ data class ProxyRecord(
     val working: String = "UNTESTED",
     val pingMs: Int = 0,
     val country: String = "",
+    val status: MobileProxyStatus = MobileProxyStatus.AVAILABLE,
+    val uses: Int = 0,
+    val hooked: Int = 0,
+    val lastUsedEpochMs: Long = 0L,
+    val lastCheckedEpochMs: Long = 0L,
+    val banReason: String = "",
     val retryCount: Int = 0,
-    val consecutiveFailures: Int = 0,
-    val banned: Boolean = false,
-    val banReason: String = ""
-)
+    val consecutiveFailures: Int = 0
+) {
+    val banned: Boolean get() = status == MobileProxyStatus.BANNED
+}
 
 data class WordlistRecord(
     val id: String = UUID.randomUUID().toString(),
@@ -54,6 +61,13 @@ class ManagerStore(context: Context) {
     fun proxies(): List<ProxyRecord> =
         readArray("proxies").mapNotNull { obj ->
             runCatching {
+                val migratedStatus = when {
+                    obj.optBoolean("banned", false) -> MobileProxyStatus.BANNED
+                    else -> runCatching {
+                        MobileProxyStatus.valueOf(obj.optString("status", "AVAILABLE"))
+                    }.getOrDefault(MobileProxyStatus.AVAILABLE)
+                }
+
                 ProxyRecord(
                     id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
                     raw = obj.getString("raw"),
@@ -64,10 +78,14 @@ class ManagerStore(context: Context) {
                     working = obj.optString("working", "UNTESTED"),
                     pingMs = obj.optInt("pingMs"),
                     country = obj.optString("country"),
+                    status = migratedStatus,
+                    uses = obj.optInt("uses"),
+                    hooked = obj.optInt("hooked"),
+                    lastUsedEpochMs = obj.optLong("lastUsedEpochMs"),
+                    lastCheckedEpochMs = obj.optLong("lastCheckedEpochMs"),
+                    banReason = obj.optString("banReason"),
                     retryCount = obj.optInt("retryCount"),
-                    consecutiveFailures = obj.optInt("consecutiveFailures"),
-                    banned = obj.optBoolean("banned", false),
-                    banReason = obj.optString("banReason")
+                    consecutiveFailures = obj.optInt("consecutiveFailures")
                 )
             }.getOrNull()
         }
@@ -77,42 +95,68 @@ class ManagerStore(context: Context) {
         saveArray("proxies", next.map(::proxyJson))
     }
 
-    fun markProxyWorking(id: String, pingMs: Int): ProxyRecord? {
+    fun markProxyChecked(
+        id: String,
+        isWorking: Boolean,
+        pingMs: Int
+    ): ProxyRecord? {
         val current = proxies().firstOrNull { it.id == id } ?: return null
-        if (current.banned) return current
-
         val updated = current.copy(
-            working = "WORKING",
+            working = if (isWorking) "WORKING" else "FAILED",
             pingMs = pingMs,
-            consecutiveFailures = 0,
-            banReason = ""
+            lastCheckedEpochMs = System.currentTimeMillis()
         )
         putProxy(updated)
         return updated
     }
 
-    fun recordProxyRetry(
-        id: String,
-        reason: String,
-        banAfter: Int
-    ): ProxyRecord? {
+    fun markProxyBusy(id: String): ProxyRecord? {
         val current = proxies().firstOrNull { it.id == id } ?: return null
-        if (current.banned) return current
-
-        val retries = current.retryCount + 1
-        val failures = current.consecutiveFailures + 1
-        val shouldBan = failures >= banAfter.coerceAtLeast(1)
-
+        if (current.status != MobileProxyStatus.AVAILABLE) return current
         val updated = current.copy(
-            retryCount = retries,
-            consecutiveFailures = failures,
-            banned = shouldBan,
-            working = if (shouldBan) "BANNED" else "FAILED",
-            banReason = if (shouldBan) {
-                "Retry limit reached ($failures): $reason"
-            } else {
-                ""
-            }
+            status = MobileProxyStatus.BUSY,
+            hooked = current.hooked + 1
+        )
+        putProxy(updated)
+        return updated
+    }
+
+    fun finishProxyUse(id: String): ProxyRecord? {
+        val current = proxies().firstOrNull { it.id == id } ?: return null
+        val nextStatus = if (current.status == MobileProxyStatus.BUSY) {
+            MobileProxyStatus.AVAILABLE
+        } else {
+            current.status
+        }
+        val updated = current.copy(
+            status = nextStatus,
+            uses = current.uses + 1,
+            hooked = (current.hooked - 1).coerceAtLeast(0),
+            lastUsedEpochMs = System.currentTimeMillis()
+        )
+        putProxy(updated)
+        return updated
+    }
+
+    fun markProxyBad(id: String, reason: String): ProxyRecord? {
+        val current = proxies().firstOrNull { it.id == id } ?: return null
+        val updated = current.copy(
+            status = MobileProxyStatus.BAD,
+            hooked = 0,
+            lastUsedEpochMs = System.currentTimeMillis(),
+            banReason = reason
+        )
+        putProxy(updated)
+        return updated
+    }
+
+    fun markProxyBanned(id: String, reason: String): ProxyRecord? {
+        val current = proxies().firstOrNull { it.id == id } ?: return null
+        val updated = current.copy(
+            status = MobileProxyStatus.BANNED,
+            hooked = 0,
+            lastUsedEpochMs = System.currentTimeMillis(),
+            banReason = reason
         )
         putProxy(updated)
         return updated
@@ -121,10 +165,12 @@ class ManagerStore(context: Context) {
     fun unbanProxy(id: String): ProxyRecord? {
         val current = proxies().firstOrNull { it.id == id } ?: return null
         val updated = current.copy(
-            banned = false,
+            status = MobileProxyStatus.AVAILABLE,
+            uses = 0,
+            hooked = 0,
             banReason = "",
-            consecutiveFailures = 0,
-            working = "UNTESTED"
+            retryCount = 0,
+            consecutiveFailures = 0
         )
         putProxy(updated)
         return updated
@@ -145,7 +191,7 @@ class ManagerStore(context: Context) {
 
     fun removeBannedProxies(): Int {
         val current = proxies()
-        val next = current.filterNot { it.banned || it.working == "BANNED" }
+        val next = current.filterNot { it.status == MobileProxyStatus.BANNED }
         val removed = current.size - next.size
         if (removed > 0) saveArray("proxies", next.map(::proxyJson))
         return removed
@@ -153,15 +199,24 @@ class ManagerStore(context: Context) {
 
     fun unbanAllProxies(): Int {
         val current = proxies()
-        val banned = current.count { it.banned || it.working == "BANNED" }
-        if (banned > 0) {
+        val resettable = current.count {
+            it.status == MobileProxyStatus.BANNED ||
+                it.status == MobileProxyStatus.BAD
+        }
+
+        if (resettable > 0) {
             val next = current.map { proxy ->
-                if (proxy.banned || proxy.working == "BANNED") {
+                if (
+                    proxy.status == MobileProxyStatus.BANNED ||
+                    proxy.status == MobileProxyStatus.BAD
+                ) {
                     proxy.copy(
-                        banned = false,
+                        status = MobileProxyStatus.AVAILABLE,
+                        uses = 0,
+                        hooked = 0,
                         banReason = "",
-                        consecutiveFailures = 0,
-                        working = "UNTESTED"
+                        retryCount = 0,
+                        consecutiveFailures = 0
                     )
                 } else {
                     proxy
@@ -169,7 +224,8 @@ class ManagerStore(context: Context) {
             }
             saveArray("proxies", next.map(::proxyJson))
         }
-        return banned
+
+        return resettable
     }
 
     fun wordlists(): List<WordlistRecord> =
@@ -275,10 +331,14 @@ class ManagerStore(context: Context) {
         .put("id", v.id).put("raw", v.raw).put("type", v.type.name)
         .put("username", v.username).put("password", v.password)
         .put("working", v.working).put("pingMs", v.pingMs).put("country", v.country)
+        .put("status", v.status.name)
+        .put("uses", v.uses)
+        .put("hooked", v.hooked)
+        .put("lastUsedEpochMs", v.lastUsedEpochMs)
+        .put("lastCheckedEpochMs", v.lastCheckedEpochMs)
+        .put("banReason", v.banReason)
         .put("retryCount", v.retryCount)
         .put("consecutiveFailures", v.consecutiveFailures)
-        .put("banned", v.banned)
-        .put("banReason", v.banReason)
 
     private fun wordlistJson(v: WordlistRecord) = JSONObject()
         .put("id", v.id).put("name", v.name).put("uri", v.uri)
