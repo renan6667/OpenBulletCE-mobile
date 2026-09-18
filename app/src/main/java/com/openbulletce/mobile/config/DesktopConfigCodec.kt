@@ -22,7 +22,9 @@ object DesktopConfigCodec {
     data class DesktopConfig(
         val settings: JSONObject,
         val script: String,
-        val originalText: String? = null
+        val originalText: String? = null,
+        val originalSettingsText: String? = null,
+        val originalScript: String? = null
     ) {
         val name: String
             get() = settings.optString("Name").ifBlank { "Unnamed config" }
@@ -32,36 +34,53 @@ object DesktopConfigCodec {
     }
 
     fun decode(text: String): DesktopConfig {
-        val normalized = text.replace("\r\n", "\n")
-        val settingsAt = normalized.indexOf(SETTINGS)
-        val scriptAt = normalized.indexOf(SCRIPT)
-
+        val parseText = text.removePrefix("\uFEFF")
+        val settingsAt = parseText.indexOf(SETTINGS)
         require(settingsAt >= 0) { "Missing [SETTINGS] section" }
+
+        val scriptAt = parseText.indexOf(
+            SCRIPT,
+            startIndex = settingsAt + SETTINGS.length
+        )
         require(scriptAt > settingsAt) { "Missing or invalid [SCRIPT] section" }
 
-        val settingsText = normalized
+        val settingsText = parseText
             .substring(settingsAt + SETTINGS.length, scriptAt)
-            .trim()
+            .trim('\r', '\n', ' ', '\t')
 
-        val scriptText = normalized
+        val scriptText = parseText
             .substring(scriptAt + SCRIPT.length)
-            .trimStart('\n')
+            .trimStart('\r', '\n')
 
         require(settingsText.isNotBlank()) { "Empty settings JSON" }
 
         return DesktopConfig(
             settings = JSONObject(settingsText),
             script = scriptText,
-            originalText = text
+            originalText = text,
+            originalSettingsText = settingsText,
+            originalScript = scriptText
         )
     }
 
-    fun encode(config: DesktopConfig): String = buildString {
-        appendLine(SETTINGS)
-        appendLine(config.settings.toString())
-        appendLine()
-        appendLine(SCRIPT)
-        append(config.script)
+    fun encode(config: DesktopConfig): String {
+        val untouched = config.originalText != null &&
+            config.originalSettingsText != null &&
+            config.originalScript != null &&
+            config.script == config.originalScript &&
+            settingsMatch(config.originalSettingsText, config.settings)
+
+        if (untouched) {
+            return config.originalText!!
+        }
+
+        return buildString {
+            appendLine(SETTINGS)
+            appendLine(config.settings.toString(2))
+            appendLine()
+            appendLine(SCRIPT)
+            append(config.script)
+        }
     }
 
     /**
@@ -78,4 +97,9 @@ object DesktopConfigCodec {
         }
         return config.copy(settings = copy)
     }
+
+    private fun settingsMatch(originalSettingsText: String, current: JSONObject): Boolean =
+        runCatching {
+            JSONObject(originalSettingsText).toString() == current.toString()
+        }.getOrDefault(false)
 }
